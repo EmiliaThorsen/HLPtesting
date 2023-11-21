@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <time.h>
 
 int max(int a, int b) {return a > b ? a : b;}
 
@@ -129,7 +130,7 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
         for(int i = 0; i < 16; i++) {
             if(specificLayer[(startPos >> (i << 2)) & 15] != goal[i]) goto wrong;
         }
-        printf("deapth: %d configuration: %03hx\n", currLayer, layerConf[l]);
+        printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
         return 1;
         wrong: continue;
     }
@@ -139,6 +140,7 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
 long sameDeapthHits = 0;
 long difLayerHits = 0;
 long misses = 0;
+long bucketUtil = 0;
 
 int casheCheck(uint64_t output, int deapth) {
     uint64_t h = output * 0x9E3779B97F4A7C15L;
@@ -151,7 +153,11 @@ int casheCheck(uint64_t output, int deapth) {
         difLayerHits++;
         return 1;
     }
-    if(casheArr[pos] != 0) misses++;
+    if(casheArr[pos] != 0) {
+        misses++;
+    } else {
+        bucketUtil++;
+    }
     casheArr[pos] = output;
     casheDeapthArr[pos] = deapth;
     return 0;
@@ -178,17 +184,22 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
 
 
 void search() {
+    clock_t programStartT = clock();
+    precomputeLayers(getGroup(wanted));
+    printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
     for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
         if(dfs(startPos, 0, 799)) break;
         printf("search over layer: %d done!\n",currLayer);
+        printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
         printf("iterations: %ld\n", iter);
-        printf("same deapth hits:%ld dif layer hits:%ld misses: %ld\n", sameDeapthHits, difLayerHits, misses);
+        printf("same deapth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDeapthHits, difLayerHits, misses, bucketUtil);
         sameDeapthHits = 0;
         difLayerHits = 0;
         misses = 0;
+        bucketUtil = 0;
         iter = 0;
         currLayer++;
         if(currLayer > 42) break;
@@ -197,7 +208,6 @@ void search() {
 
 
 int main() {
-    precomputeLayers(getGroup(wanted));
 
     int casheSize = 25;
     casheArr = calloc((1 << casheSize), 8);

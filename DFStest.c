@@ -156,6 +156,8 @@ void precomputeLayers(int group) {
     printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
     distsearchthing(1); //calculate everything 1 away from 1
     printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    distsearchthing(2); //calculate everything 1 away from 2
+    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
 }
 
 
@@ -241,7 +243,7 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         uint64_t output = fastLayer(startPos, i);
         if(output == 0) continue;
         //distance check removal
-        if(deapth == currLayer - 2) if(distCheck(output, 2)) continue;
+        if(deapth == currLayer - 3) if(distCheck(output, currLayer - deapth)) continue;
         //cache duplicate removal check
         if(casheCheck(output, deapth)) continue;
         //call next layers

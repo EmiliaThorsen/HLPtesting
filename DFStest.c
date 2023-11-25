@@ -58,6 +58,49 @@ int layerCount = 0;
 
 uint64_t startPos = 0x0123456789ABCDEF;
 
+
+uint8_t arr1[65536];
+uint8_t arr2[65536];
+uint8_t arr3[65536];
+uint8_t arr4[65536];
+int total1 = 0;
+int total2 = 0;
+int total3 = 0;
+int total4 = 0;
+
+void distsearchthing(int dist) {
+    for(uint64_t input = 0; input < 65536; input++) {
+        for(int conf = 0; conf < 1536; conf++) {
+            uint64_t output = layer(input, conf);
+            if(arr1[output & 0xFFFF] == dist) {
+                if(arr1[input] > dist + 1) {
+                    arr1[input] = dist + 1;
+                    total1++;
+                }
+            }
+            if(arr2[output & 0xFFFF] == dist) {
+                if(arr2[input] > dist + 1) {
+                    arr2[input] = dist + 1;
+                    total2++;
+                }
+            }
+            if(arr3[output & 0xFFFF] == dist) {
+                if(arr3[input] > dist + 1) {
+                    arr3[input] = dist + 1;
+                    total3++;
+                }
+            }
+            if(arr4[output & 0xFFFF] == dist) {
+                if(arr4[input] > dist + 1) {
+                    arr4[input] = dist + 1;
+                    total4++;
+                }
+            }
+        }
+    }
+}
+
+
 void precomputeLayers(int group) {
     printf("starting layer precompute\n");
     uint64_t layerSet[800];
@@ -65,6 +108,7 @@ void precomputeLayers(int group) {
         uint64_t output = layer(startPos, conf);
         if(output == startPos) continue;
         if(getGroup(output) < group) continue;
+        if(output == wanted) printf("found solution after 1 layer no search needed! conf:%03x", conf);
         for(int i = 0; i < layerCount; i++) if(layerSet[i] == output) goto skip;
         layerSet[layerCount] = output;
         layerConf[layerCount] = conf;
@@ -97,6 +141,21 @@ void precomputeLayers(int group) {
         nextValidLayersSize[conf] = nextLayerSize;
     }
     printf("layers computed:%d\n", layerCount);
+    for(uint64_t i = 0; i < 65536; i++) { //set all distances very high
+        arr1[i] = 100;
+        arr2[i] = 100;
+        arr3[i] = 100;
+        arr4[i] = 100;
+
+    }
+    arr1[(wanted      ) & 0xFFFF] = 0; //set all things that are the gaol to be 0 away
+    arr2[(wanted >> 16) & 0xFFFF] = 0;
+    arr3[(wanted >> 32) & 0xFFFF] = 0;
+    arr4[(wanted >> 48) & 0xFFFF] = 0;
+    distsearchthing(0); //calculate everything 1 away from 0
+    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    distsearchthing(1); //calculate everything 1 away from 1
+    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
 }
 
 
@@ -120,9 +179,20 @@ uint64_t fastLayer(uint64_t input, int configuration) {
     return output;
 }
 
-int currLayer = 1;
+int currLayer = 2;
+
+int distCheck(uint64_t input, int threshhold) {
+    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
+    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
+    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
+    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
+    return 0;
+}
+
 
 int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
+    if(distCheck(startPos, 1)) return 0;
+
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
         uint8_t *specificLayer = layers[l];
@@ -170,6 +240,8 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
         uint64_t output = fastLayer(startPos, i);
         if(output == 0) continue;
+        //distance check removal
+        if(deapth == currLayer - 2) if(distCheck(output, 2)) continue;
         //cache duplicate removal check
         if(casheCheck(output, deapth)) continue;
         //call next layers
@@ -188,6 +260,7 @@ void search() {
     precomputeLayers(getGroup(wanted));
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
+    printf("layer one already searched in precompute\n");
     for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;

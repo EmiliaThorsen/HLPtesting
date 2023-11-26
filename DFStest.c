@@ -48,7 +48,7 @@ int getGroup(uint64_t x) {
 }
 
 uint8_t goal[16];
-uint64_t wanted = 0x1122334455667788; //0x77239AB34567877E 0x0022002288AA88AA 0x1111222233334444 0x3141592653589793
+uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1111222233334444 0x1122334455667788
 
 
 uint8_t *layers[800];
@@ -74,25 +74,25 @@ void distsearchthing(int dist) {
         for(int conf = 0; conf < 1536; conf++) {
             uint64_t output = layer(input, conf);
             if(arr1[output & 0xFFFF] == dist) {
-                if(arr1[input] > dist + 1) {
+                if(arr1[input] == 100) {
                     arr1[input] = dist + 1;
                     total1++;
                 }
             }
             if(arr2[output & 0xFFFF] == dist) {
-                if(arr2[input] > dist + 1) {
+                if(arr2[input] == 100) {
                     arr2[input] = dist + 1;
                     total2++;
                 }
             }
             if(arr3[output & 0xFFFF] == dist) {
-                if(arr3[input] > dist + 1) {
+                if(arr3[input] == 100) {
                     arr3[input] = dist + 1;
                     total3++;
                 }
             }
             if(arr4[output & 0xFFFF] == dist) {
-                if(arr4[input] > dist + 1) {
+                if(arr4[input] == 100) {
                     arr4[input] = dist + 1;
                     total4++;
                 }
@@ -222,9 +222,6 @@ long bucketUtil = 0;
 
 void addToCashe(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
-
-    //uint64_t h = output * 0x9E3779B97F4A7C15L;
-    //uint32_t pos = (h ^= h >> 32) & casheMask;
     if(casheArr[pos] == 0) {
         bucketUtil++;
     }
@@ -234,8 +231,6 @@ void addToCashe(uint64_t output, int deapth) {
 
 int casheCheck(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
-    //uint64_t h = output * 0x9E3779B97F4A7C15L;
-    //uint32_t pos = (h ^= h >> 32) & casheMask;
     if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
         if(casheDeapthArr[pos] == deapth) {
             sameDeapthHits++;

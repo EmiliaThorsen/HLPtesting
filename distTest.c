@@ -35,8 +35,7 @@ uint64_t layer(uint64_t input, int configuration) {
 }
 
 
-uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1111222233334444
-
+uint64_t wanted = 0x1111222233334444; //0x77239AB34567877E 0x0022002288AA88AA 0x314159265358979
 uint8_t arr1[65536];
 uint8_t arr2[65536];
 uint8_t arr3[65536];
@@ -93,12 +92,34 @@ int main() {
     arr4[(wanted >> 48) & 0xFFFF] = 0;
     distsearchthing(0);
     printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    total1 = 0;
+    total2 = 0;
+    total3 = 0;
+    total4 = 0;
     distsearchthing(1);
     printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    total1 = 0;
+    total2 = 0;
+    total3 = 0;
+    total4 = 0;
     distsearchthing(2);
     printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    total1 = 0;
+    total2 = 0;
+    total3 = 0;
+    total4 = 0;
     distsearchthing(3);
     printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    total1 = 0;
+    total2 = 0;
+    total3 = 0;
+    total4 = 0;
+    distsearchthing(4);
+    printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    total1 = 0;
+    total2 = 0;
+    total3 = 0;
+    total4 = 0;
     distsearchthing(4);
     printf("total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
 }

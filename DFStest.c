@@ -47,7 +47,7 @@ int getGroup(uint64_t x) {
 }
 
 uint8_t goal[16];
-uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1111222233334444
+uint64_t wanted = 0x1122334455667788; //0x77239AB34567877E 0x0022002288AA88AA 0x1111222233334444 0x3141592653589793
 
 
 uint8_t *layers[800];
@@ -152,12 +152,16 @@ void precomputeLayers(int group) {
     arr2[(wanted >> 16) & 0xFFFF] = 0;
     arr3[(wanted >> 32) & 0xFFFF] = 0;
     arr4[(wanted >> 48) & 0xFFFF] = 0;
-    distsearchthing(0); //calculate everything 1 away from 0
-    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
-    distsearchthing(1); //calculate everything 1 away from 1
-    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
-    distsearchthing(2); //calculate everything 1 away from 2
-    printf("dist search 1, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+    int deapth = 0;
+    int prevTot = 0;
+    while (1) {
+        distsearchthing(deapth); //calculate everything 1 away from deapth
+        printf("dist search, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
+        int total = total1 + total2 + total3 + total4;
+        if(total == prevTot) break;
+        prevTot = total;
+        deapth++;
+    }
 }
 
 
@@ -167,27 +171,33 @@ uint64_t casheMask;
 
 long iter = 0;
 
+int distCheck(uint64_t input, int threshhold) {
+    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
+    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
+    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
+    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
+    return 0;
+}
+
 uint64_t fastLayer(uint64_t input, int configuration) {
     iter++;
-    uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
     uint64_t output = 0;
     uint8_t *specificLayer = layers[configuration];
     for(int i = 0; i < 16; i++) {
-        uint8_t result = specificLayer[(input >> (i << 2)) & 15];
-        if(mappings[result] != goal[i] & mappings[result] != 69) return 0;
-        mappings[result] = goal[i];
-        output |= ((uint64_t)(result) << (i << 2));
+        output |= ((uint64_t)(specificLayer[(input >> (i << 2)) & 15]) << (i << 2));
     }
     return output;
 }
 
 int currLayer = 2;
 
-int distCheck(uint64_t input, int threshhold) {
-    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
-    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
-    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
-    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
+int ilegalMapCheck(uint64_t input) {
+    uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
+    for(int i = 0; i < 16; i++) {
+        uint8_t result = (input >> (i << 2)) & 15;
+        if(mappings[result] != goal[i] & mappings[result] != 69) return 1;
+        mappings[result] = goal[i];
+    }
     return 0;
 }
 
@@ -241,9 +251,10 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
         uint64_t output = fastLayer(startPos, i);
-        if(output == 0) continue;
         //distance check removal
-        if(deapth == currLayer - 3) if(distCheck(output, currLayer - deapth)) continue;
+        if(distCheck(output, currLayer - deapth)) continue;
+        //ilegal map check
+        if(ilegalMapCheck(output)) continue;
         //cache duplicate removal check
         if(casheCheck(output, deapth)) continue;
         //call next layers

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <time.h>
+#include <x86intrin.h>
 
 int max(int a, int b) {return a > b ? a : b;}
 
@@ -100,6 +101,7 @@ void distsearchthing(int dist) {
     }
 }
 
+int distFuncDeapth = 0;
 
 void precomputeLayers(int group) {
     printf("starting layer precompute\n");
@@ -152,15 +154,14 @@ void precomputeLayers(int group) {
     arr2[(wanted >> 16) & 0xFFFF] = 0;
     arr3[(wanted >> 32) & 0xFFFF] = 0;
     arr4[(wanted >> 48) & 0xFFFF] = 0;
-    int deapth = 0;
     int prevTot = 0;
     while (1) {
-        distsearchthing(deapth); //calculate everything 1 away from deapth
+        distsearchthing(distFuncDeapth); //calculate everything 1 away from deapth
         printf("dist search, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
         int total = total1 + total2 + total3 + total4;
         if(total == prevTot) break;
         prevTot = total;
-        deapth++;
+        distFuncDeapth++;
     }
 }
 
@@ -188,6 +189,7 @@ uint64_t fastLayer(uint64_t input, int configuration) {
 int currLayer = 2;
 
 int distCheck(uint64_t input, int threshhold) {
+    if(threshhold > distFuncDeapth) return 0;
     if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
     if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
     if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
@@ -218,9 +220,22 @@ long difLayerHits = 0;
 long misses = 0;
 long bucketUtil = 0;
 
+void addToCashe(uint64_t output, int deapth) {
+    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
+
+    //uint64_t h = output * 0x9E3779B97F4A7C15L;
+    //uint32_t pos = (h ^= h >> 32) & casheMask;
+    if(casheArr[pos] == 0) {
+        bucketUtil++;
+    }
+    casheArr[pos] = output;
+    casheDeapthArr[pos] = deapth;
+}
+
 int casheCheck(uint64_t output, int deapth) {
-    uint64_t h = output * 0x9E3779B97F4A7C15L;
-    uint32_t pos = (h ^= h >> 32) & casheMask;
+    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
+    //uint64_t h = output * 0x9E3779B97F4A7C15L;
+    //uint32_t pos = (h ^= h >> 32) & casheMask;
     if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
         if(casheDeapthArr[pos] == deapth) {
             sameDeapthHits++;
@@ -229,18 +244,13 @@ int casheCheck(uint64_t output, int deapth) {
         difLayerHits++;
         return 1;
     }
-    if(casheArr[pos] != 0) {
-        misses++;
-    } else {
-        bucketUtil++;
-    }
-    casheArr[pos] = output;
-    casheDeapthArr[pos] = deapth;
+    misses++;
     return 0;
 }
 
 
 int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
+    if(casheCheck(startPos, deapth)) return 0;
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
@@ -248,8 +258,6 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         if(output == 0) continue;
         //distance check removal
         if(distCheck(output, currLayer - deapth)) continue;
-        //cache duplicate removal check
-        if(casheCheck(output, deapth)) continue;
         //call next layers
         if(dfs(output, deapth + 1, i)) {
             printf("deapth: %d configuration: %03hx\n", deapth, layerConf[i]);
@@ -257,6 +265,7 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         }
         if(deapth == 0 & currLayer > 6) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
     }
+    addToCashe(startPos, deapth);
     return 0;
 }
 

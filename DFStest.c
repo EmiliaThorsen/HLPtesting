@@ -53,6 +53,7 @@ uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x
 
 uint8_t *layers[800];
 uint16_t layerConf[800];
+uint8_t fineAsLastLayer[800];
 uint16_t nextValidLayers[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
@@ -72,6 +73,9 @@ int total4 = 0;
 void distsearchthing(int dist) {
     for(uint64_t input = 0; input < 65536; input++) {
         for(int conf = 0; conf < layerCount; conf++) {
+            if(dist == 0) {
+                if(fineAsLastLayer[conf] == 0) continue;
+            }
             uint64_t output = layer(input, layerConf[conf]);
             if(arr1[output & 0xFFFF] == dist) {
                 if(arr1[input] == 100) {
@@ -101,6 +105,22 @@ void distsearchthing(int dist) {
     }
 }
 
+
+int unionCheck(uint64_t x) {
+    uint16_t bitFeildX = 0;
+    for(int i = 0; i < 16; i++) {
+        int ss = (x >> (i * 4)) & 15;
+        bitFeildX |= 1 << ss;
+    }
+    uint16_t bitFeildG = 0;
+    for(int i = 0; i < 16; i++) {
+        int ss = (wanted >> (i * 4)) & 15;
+        bitFeildG |= 1 << ss;
+    }
+    return bitFeildG == (bitFeildG & bitFeildX);
+}
+
+
 int distFuncDeapth = 0;
 
 void precomputeLayers(int group) {
@@ -110,10 +130,10 @@ void precomputeLayers(int group) {
         uint64_t output = layer(startPos, conf);
         if(output == startPos) continue;
         if(getGroup(output) < group) continue;
-        //if(output == wanted) printf("found solution after 1 layer no search needed! conf:%03x", conf);
         for(int i = 0; i < layerCount; i++) if(layerSet[i] == output) goto skip;
         layerSet[layerCount] = output;
         layerConf[layerCount] = conf;
+        fineAsLastLayer[layerCount] = unionCheck(output);
         nextValidLayers[799 * 800 + layerCount] = layerCount;
         uint8_t *specificLayer = malloc(16);
         for(int i = 0; i < 16; i++) specificLayer[15 - i] = (output >> (i * 4)) & 15;
@@ -246,6 +266,7 @@ int casheCheck(uint64_t output, int deapth) {
 int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     if(casheCheck(startPos, deapth)) return 0;
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
+    int dedupeArrSize = 0;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
         uint64_t output = fastLayer(startPos, i);

@@ -1,10 +1,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <time.h>
 #include <x86intrin.h>
 
+//naive implementation of a layer
 int max(int a, int b) {return a > b ? a : b;}
 
 int compMode(int back, int side) {return (back >= side) * back;}
@@ -35,22 +37,15 @@ uint64_t layer(uint64_t input, int configuration) {
     return output;
 }
 
-int getGroup(uint64_t x) {
-    int group = 0;
-    uint16_t bitFeild = 0;
-    for(int i = 0; i < 16; i++) {
-        int ss = (x >> (i * 4)) & 15;
-        if(bitFeild & (1 << ss)) continue;
-        bitFeild |= 1 << ss;
-        group++;
-    }
-    return group;
-}
 
-uint8_t goal[16];
+uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
+
+//the goal you want to search to
 uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444
 
+uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
 
+//precomputed layer lookup tables
 uint8_t *layers[800];
 uint16_t layerConf[800];
 uint8_t fineAsLastLayer[800];
@@ -58,9 +53,7 @@ uint16_t nextValidLayers[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
 
-uint64_t startPos = 0x0123456789ABCDEF;
-
-
+//low estimate distance function table compute
 uint8_t arr1[65536];
 uint8_t arr2[65536];
 uint8_t arr3[65536];
@@ -71,41 +64,31 @@ int total3 = 0;
 int total4 = 0;
 
 void distsearchthing(int dist) {
-    for(uint64_t input = 0; input < 65536; input++) {
-        for(int conf = 0; conf < layerCount; conf++) {
-            if(dist == 0) {
-                if(fineAsLastLayer[conf] == 0) continue;
+    for(int conf = 0; conf < layerCount; conf++) {
+        if(dist == 0 & fineAsLastLayer[conf] == 0) continue;
+        for(uint64_t input = 0; input < 65536; input++) {
+            uint64_t output = layer(input, layerConf[conf]) & 0xFFFF;
+            if(arr1[output] == dist & arr1[input] == 100) {
+                arr1[input] = dist + 1;
+                total1++;
             }
-            uint64_t output = layer(input, layerConf[conf]);
-            if(arr1[output & 0xFFFF] == dist) {
-                if(arr1[input] == 100) {
-                    arr1[input] = dist + 1;
-                    total1++;
-                }
+            if(arr2[output] == dist & arr2[input] == 100) {
+                arr2[input] = dist + 1;
+                total2++;
             }
-            if(arr2[output & 0xFFFF] == dist) {
-                if(arr2[input] == 100) {
-                    arr2[input] = dist + 1;
-                    total2++;
-                }
+            if(arr3[output] == dist & arr3[input] == 100) {
+                arr3[input] = dist + 1;
+                total3++;
             }
-            if(arr3[output & 0xFFFF] == dist) {
-                if(arr3[input] == 100) {
-                    arr3[input] = dist + 1;
-                    total3++;
-                }
-            }
-            if(arr4[output & 0xFFFF] == dist) {
-                if(arr4[input] == 100) {
-                    arr4[input] = dist + 1;
-                    total4++;
-                }
+            if(arr4[output] == dist & arr4[input] == 100) {
+                arr4[input] = dist + 1;
+                total4++;
             }
         }
     }
 }
 
-
+//check to see if the set of outputs x encompases the output, ie its a valid layer to use at the end of the search
 int unionCheck(uint64_t x) {
     uint16_t bitFeildX = 0;
     for(int i = 0; i < 16; i++) {
@@ -120,18 +103,29 @@ int unionCheck(uint64_t x) {
     return bitFeildG == (bitFeildG & bitFeildX);
 }
 
+//counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
+int getGroup(uint64_t x) {
+    int group = 0;
+    uint16_t bitFeild = 0;
+    for(int i = 0; i < 16; i++) {
+        int ss = (x >> (i * 4)) & 15;
+        if(bitFeild & (1 << ss)) continue;
+        bitFeild |= 1 << ss;
+        group++;
+    }
+    return group;
+}
 
-int distFuncDeapth = 0;
-
+//precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
 void precomputeLayers(int group) {
     printf("starting layer precompute\n");
-    uint64_t layerSet[800];
+    uint64_t totalNextLayers[800*800];
     for(int conf = 0; conf < 1536; conf++) {
         uint64_t output = layer(startPos, conf);
         if(output == startPos) continue;
         if(getGroup(output) < group) continue;
-        for(int i = 0; i < layerCount; i++) if(layerSet[i] == output) goto skip;
-        layerSet[layerCount] = output;
+        for(int i = 0; i < layerCount; i++) if(totalNextLayers[i] == output) goto skip;
+        totalNextLayers[layerCount] = output;
         layerConf[layerCount] = conf;
         fineAsLastLayer[layerCount] = unionCheck(output);
         nextValidLayers[799 * 800 + layerCount] = layerCount;
@@ -142,8 +136,7 @@ void precomputeLayers(int group) {
         skip: continue;
     }
     nextValidLayersSize[799] = layerCount;
-    uint64_t totalNextLayers[800*800];
-    long totalNext = 0;
+    long totalNext = layerCount;
     printf("starting next layer compute\n");
     for(int conf = 0; conf < layerCount; conf++) {
         uint64_t layerOut = layer(startPos, layerConf[conf]);
@@ -151,9 +144,7 @@ void precomputeLayers(int group) {
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
             uint64_t nextLayerOut = layer(layerOut, layerConf[conf2]);
             if(nextLayerOut == startPos) continue;
-            if(nextLayerOut == layerOut) continue;
             if(getGroup(nextLayerOut) < group) continue;
-            for(int i = 0; i < layerCount; i++) if(layerSet[i] == nextLayerOut) goto nextSkip;
             for(int i = 0; i < totalNext; i++) if(totalNextLayers[i] == nextLayerOut) goto nextSkip;
             totalNextLayers[totalNext] = nextLayerOut;
             totalNext++;
@@ -163,21 +154,19 @@ void precomputeLayers(int group) {
         }
         nextValidLayersSize[conf] = nextLayerSize;
     }
-    printf("layers computed:%d, total next layers:%ld\n", layerCount, totalNext);
-    for(uint64_t i = 0; i < 65536; i++) { //set all distances very high
-        arr1[i] = 100;
-        arr2[i] = 100;
-        arr3[i] = 100;
-        arr4[i] = 100;
-
-    }
-    arr1[(wanted      ) & 0xFFFF] = 0; //set all things that are the gaol to be 0 away
+    printf("layers computed:%d, total next layers:%ld\n", layerCount, totalNext - layerCount);
+    memset(arr1, 100, sizeof(arr1));
+    memset(arr2, 100, sizeof(arr2));
+    memset(arr3, 100, sizeof(arr3));
+    memset(arr4, 100, sizeof(arr4));
+    arr1[(wanted      ) & 0xFFFF] = 0;
     arr2[(wanted >> 16) & 0xFFFF] = 0;
     arr3[(wanted >> 32) & 0xFFFF] = 0;
     arr4[(wanted >> 48) & 0xFFFF] = 0;
     int prevTot = 0;
+    int distFuncDeapth = 0;
     while (1) {
-        distsearchthing(distFuncDeapth); //calculate everything 1 away from deapth
+        distsearchthing(distFuncDeapth);
         printf("dist search, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
         int total = total1 + total2 + total3 + total4;
         if(total == prevTot) break;
@@ -187,12 +176,11 @@ void precomputeLayers(int group) {
 }
 
 
-uint64_t *casheArr;
-uint8_t *casheDeapthArr;
-uint64_t casheMask;
-
 long iter = 0;
 
+int currLayer = 1;
+
+//fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
 uint64_t fastLayer(uint64_t input, int configuration) {
     iter++;
     uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
@@ -207,18 +195,9 @@ uint64_t fastLayer(uint64_t input, int configuration) {
     return output;
 }
 
-int currLayer = 1;
-
-int distCheck(uint64_t input, int threshhold) {
-    if(threshhold > distFuncDeapth) return 0;
-    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
-    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
-    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
-    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
-    return 0;
-}
 
 
+//faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
 int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
@@ -234,19 +213,26 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
     return 0;
 }
 
+//aproximate distance function using precomputed tables
+int distCheck(uint64_t input, int threshhold) {
+    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
+    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
+    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
+    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
+    return 0;
+}
+
+
+//cache related code, used for removing identical or worse solutions
 long sameDeapthHits = 0;
 long difLayerHits = 0;
 long misses = 0;
 long bucketUtil = 0;
 
-void addToCashe(uint64_t output, int deapth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
-    if(casheArr[pos] == 0) {
-        bucketUtil++;
-    }
-    casheArr[pos] = output;
-    casheDeapthArr[pos] = deapth;
-}
+uint64_t *casheArr;
+uint8_t *casheDeapthArr;
+uint64_t casheMask;
+
 
 int casheCheck(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
@@ -258,13 +244,18 @@ int casheCheck(uint64_t output, int deapth) {
         difLayerHits++;
         return 1;
     }
-    misses++;
+    if(casheArr[pos] == 0) {
+        bucketUtil++;
+    } else {
+        misses++;
+    }
+    casheArr[pos] = output;
+    casheDeapthArr[pos] = deapth;
     return 0;
 }
 
-
+//main dfs recursive search function
 int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
-    if(casheCheck(startPos, deapth)) return 0;
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
@@ -273,6 +264,8 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         if(output == 0) continue;
         //distance check removal
         if(distCheck(output, currLayer - deapth - 1)) continue;
+        //cashe check
+        if(casheCheck(output, deapth)) continue;
         //call next layers
         if(dfs(output, deapth + 1, i)) {
             printf("deapth: %d configuration: %03hx\n", deapth, layerConf[i]);
@@ -280,17 +273,15 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         }
         if(deapth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
     }
-    addToCashe(startPos, deapth);
     return 0;
 }
 
-
+//main search loop
 void search() {
     clock_t programStartT = clock();
     precomputeLayers(getGroup(wanted));
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
-    printf("layer one already searched in precompute\n");
     for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
@@ -311,7 +302,7 @@ void search() {
 
 
 int main() {
-
+    //alocating the cache
     int casheSize = 25;
     casheArr = calloc((1 << casheSize), 8);
     casheDeapthArr = calloc((1 << casheSize), 1);

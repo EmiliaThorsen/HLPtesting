@@ -41,7 +41,7 @@ uint64_t layer(uint64_t input, int configuration) {
 uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
 
 //the goal you want to search to
-uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444
+uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
 
 uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
 
@@ -213,12 +213,31 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
     return 0;
 }
 
+int cmpfunc (const void * a, const void * b) {
+   return ( *(int*)a - *(int*)b );
+}
+
+int abs(x) {
+    if(x < 0) return -x;
+    return x;
+}
+
 //aproximate distance function using precomputed tables
 int distCheck(uint64_t input, int threshhold) {
     if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
     if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
     if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
     if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
+    int arr[16];
+    for(int i = 0; i < 16; i++) { //zip(start, goal)
+        arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
+    }
+    qsort(arr, 16, sizeof(int), cmpfunc); //sorted()
+    int total = 1;
+    for(int i = 0; i < 15; i++) {//"big jump" magic
+        if(abs((arr[i] & 15) - (arr[i + 1] & 15)) > abs(((arr[i] >> 4) & 15) - ((arr[i + 1] >> 4) & 15))) total++;
+    }
+    if((total >> 1) > threshhold) return 1; //if distance is too far return 1 to prune it
     return 0;
 }
 

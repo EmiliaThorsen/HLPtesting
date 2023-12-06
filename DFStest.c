@@ -53,56 +53,6 @@ uint16_t nextValidLayers[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
 
-//low estimate distance function table compute
-uint8_t arr1[65536];
-uint8_t arr2[65536];
-uint8_t arr3[65536];
-uint8_t arr4[65536];
-int total1 = 0;
-int total2 = 0;
-int total3 = 0;
-int total4 = 0;
-
-void distsearchthing(int dist) {
-    for(int conf = 0; conf < layerCount; conf++) {
-        if(dist == 0 & fineAsLastLayer[conf] == 0) continue;
-        for(uint64_t input = 0; input < 65536; input++) {
-            uint64_t output = layer(input, layerConf[conf]) & 0xFFFF;
-            if(arr1[output] == dist & arr1[input] == 100) {
-                arr1[input] = dist + 1;
-                total1++;
-            }
-            if(arr2[output] == dist & arr2[input] == 100) {
-                arr2[input] = dist + 1;
-                total2++;
-            }
-            if(arr3[output] == dist & arr3[input] == 100) {
-                arr3[input] = dist + 1;
-                total3++;
-            }
-            if(arr4[output] == dist & arr4[input] == 100) {
-                arr4[input] = dist + 1;
-                total4++;
-            }
-        }
-    }
-}
-
-//check to see if the set of outputs x encompases the output, ie its a valid layer to use at the end of the search
-int unionCheck(uint64_t x) {
-    uint16_t bitFeildX = 0;
-    for(int i = 0; i < 16; i++) {
-        int ss = (x >> (i * 4)) & 15;
-        bitFeildX |= 1 << ss;
-    }
-    uint16_t bitFeildG = 0;
-    for(int i = 0; i < 16; i++) {
-        int ss = (wanted >> (i * 4)) & 15;
-        bitFeildG |= 1 << ss;
-    }
-    return bitFeildG == (bitFeildG & bitFeildX);
-}
-
 //counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
 int getGroup(uint64_t x) {
     int group = 0;
@@ -127,7 +77,6 @@ void precomputeLayers(int group) {
         for(int i = 0; i < layerCount; i++) if(totalNextLayers[i] == output) goto skip;
         totalNextLayers[layerCount] = output;
         layerConf[layerCount] = conf;
-        fineAsLastLayer[layerCount] = unionCheck(output);
         nextValidLayers[799 * 800 + layerCount] = layerCount;
         uint8_t *specificLayer = malloc(16);
         for(int i = 0; i < 16; i++) specificLayer[15 - i] = (output >> (i * 4)) & 15;
@@ -155,24 +104,6 @@ void precomputeLayers(int group) {
         nextValidLayersSize[conf] = nextLayerSize;
     }
     printf("layers computed:%d, total next layers:%ld\n", layerCount, totalNext - layerCount);
-    memset(arr1, 100, sizeof(arr1));
-    memset(arr2, 100, sizeof(arr2));
-    memset(arr3, 100, sizeof(arr3));
-    memset(arr4, 100, sizeof(arr4));
-    arr1[(wanted      ) & 0xFFFF] = 0;
-    arr2[(wanted >> 16) & 0xFFFF] = 0;
-    arr3[(wanted >> 32) & 0xFFFF] = 0;
-    arr4[(wanted >> 48) & 0xFFFF] = 0;
-    int prevTot = 0;
-    int distFuncDeapth = 0;
-    while (1) {
-        distsearchthing(distFuncDeapth);
-        printf("dist search, total1:%d total2:%d total3:%d total4:%d\n", total1, total2, total3, total4);
-        int total = total1 + total2 + total3 + total4;
-        if(total == prevTot) break;
-        prevTot = total;
-        distFuncDeapth++;
-    }
 }
 
 
@@ -224,20 +155,16 @@ int abs(x) {
 
 //aproximate distance function using precomputed tables
 int distCheck(uint64_t input, int threshhold) {
-    if(arr1[(input      ) & 0xFFFF] > threshhold) return 1;
-    if(arr2[(input >> 16) & 0xFFFF] > threshhold) return 1;
-    if(arr3[(input >> 32) & 0xFFFF] > threshhold) return 1;
-    if(arr4[(input >> 48) & 0xFFFF] > threshhold) return 1;
     int arr[16];
     for(int i = 0; i < 16; i++) { //zip(start, goal)
         arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
     }
     qsort(arr, 16, sizeof(int), cmpfunc); //sorted()
-    int total = 1;
+    int total = 0;
     for(int i = 0; i < 15; i++) {//"big jump" magic
         if(abs((arr[i] & 15) - (arr[i + 1] & 15)) > abs(((arr[i] >> 4) & 15) - ((arr[i + 1] >> 4) & 15))) total++;
     }
-    if((total >> 1) > threshhold) return 1; //if distance is too far return 1 to prune it
+    if(total > threshhold) return 1; //if distance is too far return 1 to prune it
     return 0;
 }
 
@@ -313,10 +240,11 @@ void search() {
         difLayerHits = 0;
         misses = 0;
         bucketUtil = 0;
-        iter = 0;
+        //iter = 0;
         currLayer++;
         if(currLayer > 42) break;
     }
+    printf("total iter over all: %ld\n", iter);
 }
 
 

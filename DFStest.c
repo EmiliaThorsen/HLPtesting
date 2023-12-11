@@ -50,6 +50,7 @@ uint8_t *layers[800];
 uint16_t layerConf[800];
 uint8_t fineAsLastLayer[800];
 uint16_t nextValidLayers[800*800];
+uint8_t layerGroups[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
 
@@ -67,13 +68,12 @@ int getGroup(uint64_t x) {
 }
 
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
-void precomputeLayers(int group) {
+void precomputeLayers() {
     printf("starting layer precompute\n");
     uint64_t totalNextLayers[800*800];
     for(int conf = 0; conf < 1536; conf++) {
         uint64_t output = layer(startPos, conf);
         if(output == startPos) continue;
-        if(getGroup(output) < group) continue;
         for(int i = 0; i < layerCount; i++) if(totalNextLayers[i] == output) goto skip;
         totalNextLayers[layerCount] = output;
         layerConf[layerCount] = conf;
@@ -93,7 +93,6 @@ void precomputeLayers(int group) {
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
             uint64_t nextLayerOut = layer(layerOut, layerConf[conf2]);
             if(nextLayerOut == startPos) continue;
-            if(getGroup(nextLayerOut) < group) continue;
             for(int i = 0; i < totalNext; i++) if(totalNextLayers[i] == nextLayerOut) goto nextSkip;
             totalNextLayers[totalNext] = nextLayerOut;
             totalNext++;
@@ -107,13 +106,11 @@ void precomputeLayers(int group) {
 }
 
 
-long iter = 0;
 
-int currLayer = 1;
+int currLayer = 0;
 
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
 uint64_t fastLayer(uint64_t input, int configuration) {
-    iter++;
     uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
     uint64_t output = 0;
     uint8_t *specificLayer = layers[configuration];
@@ -133,11 +130,9 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
         uint8_t *specificLayer = layers[l];
-        iter++;
         for(int i = 0; i < 16; i++) {
             if(specificLayer[(startPos >> (i << 2)) & 15] != goal[i]) goto wrong;
         }
-        printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
         return 1;
         wrong: continue;
     }
@@ -154,7 +149,7 @@ int abs(x) {
 }
 
 //aproximate distance function using precomputed tables
-int distCheck(uint64_t input, int threshhold) {
+int distCheck(uint64_t input) {
     int arr[16];
     for(int i = 0; i < 16; i++) { //zip(start, goal)
         arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
@@ -164,8 +159,7 @@ int distCheck(uint64_t input, int threshhold) {
     for(int i = 0; i < 15; i++) {//"big jump" magic
         if(abs((arr[i] & 15) - (arr[i + 1] & 15)) > abs(((arr[i] >> 4) & 15) - ((arr[i + 1] >> 4) & 15))) total++;
     }
-    if(total > threshhold) return 1; //if distance is too far return 1 to prune it
-    return 0;
+    return total;
 }
 
 
@@ -183,17 +177,7 @@ uint64_t casheMask;
 int casheCheck(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
     if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
-        if(casheDeapthArr[pos] == deapth) {
-            sameDeapthHits++;
-            return 1;
-        }
-        difLayerHits++;
         return 1;
-    }
-    if(casheArr[pos] == 0) {
-        bucketUtil++;
-    } else {
-        misses++;
     }
     casheArr[pos] = output;
     casheDeapthArr[pos] = deapth;
@@ -209,51 +193,53 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         uint64_t output = fastLayer(startPos, i);
         if(output == 0) continue;
         //distance check removal
-        if(distCheck(output, currLayer - deapth - 1)) continue;
+        if(distCheck(output) > (currLayer - deapth - 1)) continue;
         //cashe check
         if(casheCheck(output, deapth)) continue;
         //call next layers
         if(dfs(output, deapth + 1, i)) {
-            printf("deapth: %d configuration: %03hx\n", deapth, layerConf[i]);
             return 1;
         }
-        if(deapth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
     }
     return 0;
 }
 
+uint64_t randUint64() {
+  uint64_t r = 0;
+  for (int i=0; i<64; i++) {
+    r = r*2 + rand()%2;
+  }
+  return r;
+}
+
 //main search loop
 void search() {
-    clock_t programStartT = clock();
-    precomputeLayers(getGroup(wanted));
-    printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
-    for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
     while (1) {
-        for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
-        if(dfs(startPos, 0, 799)) break;
-        printf("search over layer: %d done!\n",currLayer);
-        printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
-        printf("iterations: %ld\n", iter);
-        printf("same deapth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDeapthHits, difLayerHits, misses, bucketUtil);
-        sameDeapthHits = 0;
-        difLayerHits = 0;
-        misses = 0;
-        bucketUtil = 0;
-        //iter = 0;
-        currLayer++;
-        if(currLayer > 42) break;
+        wanted = randUint64();
+        for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
+        currLayer = distCheck(startPos) - 1;
+        while (1) {
+            for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
+            currLayer++;
+            if(currLayer > 42) break;
+            if(dfs(startPos, 0, 799)) break;
+        }
+        printf("found %16lx in layer: %d\n", wanted, currLayer);
+        currLayer = 0;
     }
-    printf("total iter over all: %ld\n", iter);
 }
 
 
 int main() {
+    //seed rng to time
+    srand(time(NULL));
     //alocating the cache
     int casheSize = 25;
     casheArr = calloc((1 << casheSize), 8);
     casheDeapthArr = calloc((1 << casheSize), 1);
     casheMask = (1 << casheSize) - 1;
-
+    printf("starting precompute");
+    precomputeLayers();
     search();
 }

@@ -212,6 +212,9 @@ uint64_t randUint64() {
   return r;
 }
 
+int totalSearched = 0;
+int totalSearchedLayers = 0;
+int highestLayerCount = 0;
 //main search loop
 void search() {
     printf("starting search!\n");
@@ -225,7 +228,10 @@ void search() {
             if(currLayer > 42) break;
             if(dfs(startPos, 0, 799)) break;
         }
-        printf("found %16lx in layer: %d\n", wanted, currLayer);
+        totalSearched++;
+        totalSearchedLayers += currLayer;
+        if(highestLayerCount < currLayer) highestLayerCount = currLayer;
+        printf("found %16lx in layer: %d, total searched cases: %d, avrage case dificulity: %f, hardest yet case took: %d layers\n", wanted, currLayer, totalSearched, (double)totalSearchedLayers / totalSearched, highestLayerCount);
         currLayer = 0;
     }
 }

@@ -40,11 +40,7 @@ uint64_t layer(uint64_t input, int configuration) {
 
 uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
 
-//the goal you want to search to
-uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
-
-uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
-
+ 
 //precomputed layer lookup tables
 uint8_t *layers[800];
 uint16_t layerConf[800];
@@ -110,7 +106,7 @@ void precomputeLayers() {
 int currLayer = 0;
 
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
-uint64_t fastLayer(uint64_t input, int configuration) {
+uint64_t fastLayer(uint64_t input, int configuration, uint8_t *goal) {
     uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
     uint64_t output = 0;
     uint8_t *specificLayer = layers[configuration];
@@ -126,7 +122,7 @@ uint64_t fastLayer(uint64_t input, int configuration) {
 
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
-int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
+int fastLastLayerSearch(uint64_t startPos, int prevLayerConf, uint8_t *goal) {
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
         uint8_t *specificLayer = layers[l];
@@ -149,7 +145,7 @@ int abs(x) {
 }
 
 //aproximate distance function using precomputed tables
-int distCheck(uint64_t input) {
+int distCheck(uint64_t input, uint8_t *goal) {
     int arr[16];
     for(int i = 0; i < 16; i++) { //zip(start, goal)
         arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
@@ -163,41 +159,46 @@ int distCheck(uint64_t input) {
 }
 
 
-//cache related code, used for removing identical or worse solutions
-long sameDeapthHits = 0;
-long difLayerHits = 0;
-long misses = 0;
-long bucketUtil = 0;
+struct output {
+    int i;
+    uint64_t output;
+    int group;
+};
 
-uint64_t *casheArr;
-uint8_t *casheDeapthArr;
-uint64_t casheMask;
-
-
-int casheCheck(uint64_t output, int deapth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
-    if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
-        return 1;
-    }
-    casheArr[pos] = output;
-    casheDeapthArr[pos] = deapth;
-    return 0;
-}
 
 //main dfs recursive search function
-int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
-    if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
-    int dedupeArrSize = 0;
+int dfs(uint64_t startPos, int deapth, int prevLayerConf, int safeMode, uint8_t *goal) {
+    if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf, goal);
+    struct output outputs[787];
+    int count = 0;
+    int minG = 16;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
-        uint64_t output = fastLayer(startPos, i);
+        uint64_t output = fastLayer(startPos, i, goal);
         if(output == 0) continue;
-        //distance check removal
-        if(distCheck(output) > (currLayer - deapth - 1)) continue;
-        //cashe check
-        if(casheCheck(output, deapth)) continue;
+
+        if((distCheck(output, goal) - safeMode) > (currLayer - deapth - 1)) continue;
+
+        int group = getGroup(output);
+        outputs[count].output = output;
+        outputs[count].i = i;
+        outputs[count].group = group;
+        count++;
+        if(group < minG) minG = group;
+    }
+    if(safeMode == 0) {
+        int overwriteIndex = 0;
+        for (int i = 0; i < count; i++) {
+            if((outputs[i].group > minG)) continue;
+            outputs[overwriteIndex] = outputs[i];
+            overwriteIndex++;
+        }
+        count = overwriteIndex;
+
+    }
+    for(int i = 0; i < count; i++) {
         //call next layers
-        if(dfs(output, deapth + 1, i)) {
+        if(dfs(outputs[i].output, deapth + 1, outputs[i].i, safeMode, goal)) {
             return 1;
         }
     }
@@ -218,21 +219,35 @@ int highestLayerCount = 0;
 //main search loop
 void search() {
     printf("starting search!\n");
-    while (1) {
-        wanted = randUint64();
-        for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
-        currLayer = distCheck(startPos) - 1;
+    #pragma omp parallel
+    {
         while (1) {
-            for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
-            currLayer++;
-            if(currLayer > 42) break;
-            if(dfs(startPos, 0, 799)) break;
+            uint64_t wanted = randUint64();
+            uint8_t goal[16];
+            for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
+            currLayer = distCheck(startPos, goal) - 1;
+            while (1) {
+                currLayer++;
+                if(currLayer > 42) break;
+                if(dfs(startPos, 0, 799, 0, goal)) break;
+            }
+            if(currLayer > 18) {
+                currLayer = 0;
+                while (1) {
+                    currLayer++;
+                    if(currLayer > 42) break;
+                    if(dfs(startPos, 0, 799, 1, goal)) break;
+                }
+            }
+            #pragma omp critical
+            {
+                totalSearched++;
+                totalSearchedLayers += currLayer;
+                if(highestLayerCount < currLayer) highestLayerCount = currLayer;
+                printf("found %16lx in layer: %d, total searched cases: %d, avrage case dificulity: %f, hardest yet case took: %d layers\n", wanted, currLayer, totalSearched, (double)totalSearchedLayers / totalSearched, highestLayerCount);
+                currLayer = 0;
+            }
         }
-        totalSearched++;
-        totalSearchedLayers += currLayer;
-        if(highestLayerCount < currLayer) highestLayerCount = currLayer;
-        printf("found %16lx in layer: %d, total searched cases: %d, avrage case dificulity: %f, hardest yet case took: %d layers\n", wanted, currLayer, totalSearched, (double)totalSearchedLayers / totalSearched, highestLayerCount);
-        currLayer = 0;
     }
 }
 
@@ -240,11 +255,8 @@ void search() {
 int main() {
     //seed rng to time
     srand(time(NULL));
-    //alocating the cache
-    int casheSize = 25;
-    casheArr = calloc((1 << casheSize), 8);
-    casheDeapthArr = calloc((1 << casheSize), 1);
-    casheMask = (1 << casheSize) - 1;
+    //srand(69420);
+
     printf("starting precompute");
     precomputeLayers();
     search();

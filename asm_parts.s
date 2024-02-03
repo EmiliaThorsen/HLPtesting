@@ -9,6 +9,7 @@ global array_to_uint, uint_to_array
 global apply_mapping, store_mapping
 global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
+global layer
 
 extern goal
 
@@ -36,6 +37,74 @@ xmm2uint_perm: db 15,13,11,9,7,5,3,1,14,12,10,8,6,4,2,0
 ; section .note.GNU-stack,"",@progbits
 
 section .text
+
+layer:
+        ; rdi: map
+        ; si: config (RABaaaabbbb, b being the side comparator)
+
+        ; unpack map
+    vmovq xmm0, rdi
+    vmovdqa ymm7, [low_byte_mask]
+    vpslldq xmm1, xmm0, 8
+    vpsrlq xmm1, 4
+    vpor xmm0, xmm1
+    vpand xmm0, xmm7
+
+        ; unpack config
+        ; adjust mode if rotated
+    mov rax, rsi
+    shr rax, 10
+    shl rax, 8
+    add rsi, rax
+
+        ; ss
+    vmovd xmm4, esi
+    vpbroadcastb xmm2, xmm4
+    vpsrlq xmm3, xmm2, 4
+    vpand xmm2, xmm7
+    vpand xmm3, xmm7
+
+        ; modes & rotation
+    vpshufd xmm4, xmm4, 0
+    vpslld xmm6, xmm4, 23 - 2
+    vpslld xmm5, xmm4, 23 - 1
+    vpslld xmm4, xmm4, 23 - 0
+    vpsrad xmm6, 31
+    vpsrad xmm5, 31
+    vpsrad xmm4, 31
+
+        ; swap if rotated
+    vpxor xmm7, xmm0, xmm3
+    vpand xmm6, xmm7
+    vpxor xmm1, xmm3, xmm6
+    vpxor xmm3, xmm0, xmm6
+
+        ; xmm0: side side
+        ; xmm1: forth side
+        ; xmm2: side back
+        ; xmm3: forth back
+        ; xmm4: side mode (-1 = s, 0 = c)
+        ; xmm5: forth mode
+        ; apply the comparators
+    vpcmpgtb xmm6, xmm0, xmm2
+    vpcmpgtb xmm7, xmm1, xmm3
+    vpand xmm0, xmm0, xmm4
+    vpand xmm1, xmm1, xmm5
+    vpsubb xmm0, xmm2, xmm0
+    vpsubb xmm1, xmm3, xmm1
+    vpandn xmm0, xmm6, xmm0
+    vpandn xmm1, xmm7, xmm1
+
+    vpmaxub xmm0, xmm1
+
+        ; pack back into return
+    vpsrldq xmm1, xmm0, 8
+    vpsllq xmm1, 4
+    vpor xmm1, xmm0
+    vmovq rax, xmm1
+    
+    ret
+
 
 
         ; idk which way is which lol
@@ -213,6 +282,8 @@ layer_inner_cs:
 
 layer_inner_rot_sc:
     layer_implementation 4
+
+
 
 
 

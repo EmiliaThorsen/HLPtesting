@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <x86intrin.h>
+#include <stdbool.h>
 
 extern uint64_t apply_mapping(uint64_t input, uint8_t* map);
 extern uint64_t apply_and_check(uint64_t input, uint8_t* map, int threshhold);
@@ -12,6 +13,29 @@ extern void bitonic_sort16x8(uint8_t* array);
 extern uint64_t array_to_uint(uint8_t* array);
 extern void pretty_uint_to_array(uint64_t uint, uint8_t* array);
 extern void store_mapping(uint64_t map, uint8_t* location);
+
+extern uint64_t layer(uint64_t map, uint16_t config);
+
+
+extern void batch_apply(
+        uint64_t start,
+        uint64_t* output,
+        uint16_t* configurations,
+        int quantity);
+
+extern void batch_apply_and_check(
+        uint64_t start,
+        uint64_t goal,
+        uint64_t* output_maps,
+        uint16_t* output_configurations,
+        uint16_t* input_configurations,
+        int quantity,
+        int threshhold);
+
+extern int search_last_layer(
+        uint64_t start,
+        uint16_t* configurations,
+        int quantity);
 
 //naive implementation of a layer
 int max(int a, int b) {return a > b ? a : b;}
@@ -24,26 +48,59 @@ int subMode(int back, int side) {
     return 0;
 }
 
-uint64_t layer(uint64_t input, int configuration) {
-    int ss1 = (configuration) & 15;
-    int ss2 = (configuration >> 4) & 15;
-    long output = 0;
-    for(int i = 0; i < 64; i += 4) {
-        int ss = (input >> i) & 15;
-        int result = 0;
-        switch ((configuration >> 8) & 7) {
-            case 0: result = max(compMode(ss1, ss), compMode(ss, ss2)); break;
-            case 1: result = max(subMode(ss1, ss) , compMode(ss, ss2)); break;
-            case 2: result = max(compMode(ss1, ss), subMode(ss, ss2) ); break;
-            case 3: result = max(subMode(ss1, ss) , subMode(ss, ss2) ); break;
-            case 4: result = max(subMode(ss1, ss) , compMode(ss2, ss)); break;
-            case 5: result = max(compMode(ss1, ss), subMode(ss2, ss) ); break;
-        }
-        output = output | ((long)(result) << i);
-    }
-    return output;
+
+const uint64_t broadcast8 = 0x0101010101010101;
+const uint64_t broadcast16 = broadcast8 | (broadcast8 << 4);
+const uint64_t barrier8 = broadcast8 * 0x80;
+const uint64_t low_halves64 = broadcast8 * 15;
+const uint64_t high_halves64 = low_halves64 << 4;
+
+uint64_t discount_simd_max_half(uint64_t a, uint64_t b) {
+    uint64_t mask = (((barrier8 + a - b) ^ barrier8) >> 4) & low_halves64;
+    return (~mask & a) | (mask & b);
 }
 
+uint64_t discount_simd_max(uint64_t a, uint64_t b) {
+    uint64_t low = discount_simd_max_half(a & low_halves64, b & low_halves64);
+    uint64_t high = discount_simd_max_half((a & high_halves64) >> 4, (b & high_halves64) >> 4);
+    return low | (high << 4);
+}
+
+uint64_t discount_simd_comparator_half(uint64_t back, uint64_t side, bool mode) {
+    uint64_t diff = barrier8 + back - side;
+    uint64_t cancel = ((diff ^ barrier8 ^ high_halves64) >> 4) & low_halves64;
+    return (mode ? diff : back) & cancel;
+}
+
+uint64_t discount_simd_comparator(uint64_t back, uint64_t side, bool mode) {
+    uint64_t low = discount_simd_comparator_half(back & low_halves64, side & low_halves64, mode);
+    uint64_t high = discount_simd_comparator_half((back & high_halves64) >> 4, (side & high_halves64) >> 4, mode);
+    return low | (high << 4);
+}
+
+/*
+uint64_t layer(uint64_t input, int configuration) {
+    return layer_vec(input, configuration);
+    uint8_t ss = configuration & 0xff;
+    switch ((configuration >> 8) & 7) {
+        case 0: return layer_inner_cc(input, ss);
+        case 1: return layer_inner_sc(input, ss);
+        case 2: return layer_inner_cs(input, ss);
+        case 3: return layer_inner_ss(input, ss);
+        //case 4: case 5: return layer_inner_rot_sc(input, ss);
+    }
+    uint64_t ss1 = broadcast16 * ((configuration) & 15);
+    uint64_t ss2 = broadcast16 * ((configuration >> 4) & 15);
+    switch ((configuration >> 8) & 7) {
+        case 0: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(input, ss2, 0));
+        case 1: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(input, ss2, 0));
+        case 2: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(input, ss2, 1));
+        case 3: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(input, ss2, 1));
+        case 4: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(ss2, input, 0));
+        case 5: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(ss2, input, 1));
+    }
+}
+*/
 
 //uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
 uint64_t startPos = 0xf7e6d5c4b3a29180; //how bout i do anyway
@@ -89,7 +146,6 @@ void precomputeLayers(int group) {
         nextValidLayers[799 * 800 + layerCount] = layerCount;
         uint8_t *specificLayer = malloc(16);
         store_mapping(output, specificLayer);
-        /* for(int i = 0; i < 16; i++) specificLayer[15 - i] = (output >> (i * 4)) & 15; */
         layers[layerCount] = specificLayer;
         layerCount++;
         skip: continue;
@@ -98,10 +154,10 @@ void precomputeLayers(int group) {
     long totalNext = layerCount;
     printf("starting next layer compute\n");
     for(int conf = 0; conf < layerCount; conf++) {
-        uint64_t layerOut = apply_mapping(startPos, layers[conf]);
+        uint64_t layerOut = layer(startPos, layerConf[conf]);
         int nextLayerSize = 0;
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
-            uint64_t nextLayerOut = apply_mapping(layerOut, layers[conf2]);
+            uint64_t nextLayerOut = layer(layerOut, layerConf[conf2]);
             if(nextLayerOut == startPos) continue;
             if(getGroup(nextLayerOut) < group) continue;
             for(int i = 0; i < totalNext; i++) if(totalNextLayers[i] == nextLayerOut) goto nextSkip;
@@ -159,6 +215,7 @@ uint8_t *casheDeapthArr;
 uint64_t casheMask;
 
 
+
 int casheCheck(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
     if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
@@ -187,8 +244,6 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
         uint64_t output = fastLayer(startPos, i, currLayer - deapth - 1);
         if (output == 0) continue;
-
-        /* if(check_mapping_fast(output)) continue; */
 
         //cashe check
         if(casheCheck(output, deapth)) continue;
@@ -229,8 +284,10 @@ void search() {
     printf("total iter over all: %ld\n", iter);
 }
 
+const uint64_t pretty_start = 0xfedcba9876543210;
 
 int main() {
+
     //alocating the cache
     int casheSize = 25;
     casheArr = calloc((1 << casheSize), 8);

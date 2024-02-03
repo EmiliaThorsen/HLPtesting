@@ -6,6 +6,9 @@
 #include <time.h>
 #include <x86intrin.h>
 
+extern uint64_t apply_mapping(uint64_t input, uint8_t* map);
+extern void bitonic_sort16x8(uint8_t* array);
+
 //naive implementation of a layer
 int max(int a, int b) {return a > b ? a : b;}
 
@@ -111,17 +114,22 @@ long iter = 0;
 
 int currLayer = 1;
 
+int mismatches;
+
+uint64_t avx_rerun(uint64_t input, uint8_t* map) {
+    apply_mapping(input, map);
+}
+
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
 uint64_t fastLayer(uint64_t input, int configuration) {
     iter++;
     uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
-    uint64_t output = 0;
+    uint64_t output = apply_mapping(input, layers[configuration]);
     uint8_t *specificLayer = layers[configuration];
     for(int i = 0; i < 16; i++) {
         uint8_t result = specificLayer[(input >> (i << 2)) & 15];
         if(mappings[result] != goal[i] & mappings[result] != 69) return 0;
         mappings[result] = goal[i];
-        output |= ((uint64_t)(result) << (i << 2));
     }
     return output;
 }
@@ -155,11 +163,12 @@ int abs(x) {
 
 //aproximate distance function using precomputed tables
 int distCheck(uint64_t input, int threshhold) {
-    int arr[16];
+    uint8_t arr[16];
     for(int i = 0; i < 16; i++) { //zip(start, goal)
         arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
     }
-    qsort(arr, 16, sizeof(int), cmpfunc); //sorted()
+    bitonic_sort16x8(arr);
+    //qsort(arr, 16, sizeof(int), cmpfunc); //sorted()
     int total = 0;
     for(int i = 0; i < 15; i++) {//"big jump" magic
         if(abs((arr[i] & 15) - (arr[i + 1] & 15)) > abs(((arr[i] >> 4) & 15) - ((arr[i + 1] >> 4) & 15))) total++;

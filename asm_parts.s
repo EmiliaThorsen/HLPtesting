@@ -2,7 +2,7 @@ default rel
 BITS 64
 %use altreg
 
-global check_mapping_fast; input, configuration, threshold
+global apply_and_check; input, configuration, threshold
 global bitonic_sort16x8; pointer to byte array
 global pretty_uint_to_array; uint, array
 global array_to_uint, uint_to_array
@@ -108,6 +108,97 @@ section .text
     ret
 %endmacro
 
+
+%macro bitonic_sort_inner 0
+    nop
+    vmovdqa xmm8, [counting]
+    vmovdqa xmm9, [bitonic_swap + 0]
+    vmovdqa xmm12, [bitonic_flip + 0]
+
+        ; xmm9-12: permutation that swaps the values
+        ; xmm8: list of indices
+        ; xmm7: permutation to broadcast higher index
+        ; xmm0: the working vector
+        ; xmm1: the swapped, then maxed values
+        ; xmm2: the higher index value, xored into xmm0
+
+    vpmaxub xmm7, xmm8, xmm9
+    
+    vpshufb xmm1, xmm0, xmm9
+    vpshufb xmm2, xmm0, xmm7
+    vmovdqa xmm10, [bitonic_swap + 16]
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm12
+    vpxor xmm0, xmm1
+
+    
+    vpshufb xmm1, xmm0, xmm12
+    vpshufb xmm2, xmm0, xmm7
+    vmovdqa xmm12, [bitonic_flip + 16]
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm9
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm9
+    vpshufb xmm2, xmm0, xmm7
+    vmovdqa xmm11, [bitonic_swap + 32]
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm12
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm12
+    vpshufb xmm2, xmm0, xmm7
+    vmovdqa xmm12, [bitonic_flip + 32]
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm10
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm10
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm9
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm9
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm12
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm12
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm11
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm11
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm10
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm10
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpmaxub xmm7, xmm8, xmm9
+    vpxor xmm0, xmm1
+    
+    vpshufb xmm1, xmm0, xmm9
+    vpshufb xmm2, xmm0, xmm7
+    vpmaxub xmm1, xmm0
+    vpxor xmm0, xmm2
+    vpxor xmm0, xmm1
+%endmacro
+
 layer_inner_cc:
     layer_implementation 0
 
@@ -200,22 +291,35 @@ apply_mapping:
     vmovq rax, xmm1
     ret
 
-check_mapping_fast:
+apply_and_check:
         ; unpack the state
     vmovq xmm0, rdi
     vmovdqa xmm4, [low_byte_mask]
     vpslldq xmm2, xmm0, 8
     vpsrlq xmm2, 4
-    vpor xmm0, xmm2
+    vpand xmm2, xmm4
     vpand xmm0, xmm4
+    vpor xmm0, xmm2
+
+        ; get and apply mapping
+    vmovdqa xmm3, [rsi]
+    vpshufb xmm0, [uint2xmm_perm]
+    vpshufb xmm0, xmm3, xmm0
+    vpshufb xmm0, [xmm2uint_perm]
+
+        ; pack it up and go
+    vpsrldq xmm1, xmm0, 8
+    vpsllq xmm1, 4
+    vpor xmm1, xmm0
+    vmovq rax, xmm1
+
     vpshufb xmm0, [uint2xmm_r_perm]
 
         ; prepare for sorting
-    ; vmovdqu xmm1, [goal]
     vpsllq xmm0, 4
     vpor xmm0, [goal]
 
-    call bitonic_sort_inner
+    bitonic_sort_inner
 
     vpsrlq xmm1, xmm0, 4
     vpand xmm0, xmm4
@@ -232,116 +336,29 @@ check_mapping_fast:
 
         ; xmm0-1: same as before but now deltas
     vpxor xmm5, xmm5
-    xor rax, rax
+    xor rcx, rcx
     vpcmpeqb xmm2, xmm1, xmm5
     vptest xmm2, xmm0
-    setnz al
+    setz cl
+    neg rcx
+    and rax, rcx
 
-    xor rdx, rdx
+    xor rcx, rcx
     vpabsb xmm0, xmm0
     vpsubb xmm3, xmm1, xmm0
-    vpmovmskb rcx, xmm3
-    popcnt rcx, rcx
-    cmp rcx, rsi
-    setg dl
-    or rax, rdx
+    vpmovmskb rdi, xmm3
+    popcnt rdi, rdi
+    cmp rdi, rdx
+    setng cl
+    neg rcx
+    and rax, rcx
 
     ret
 
 bitonic_sort16x8:
     vmovdqa xmm0, [rdi]
-    call bitonic_sort_inner
+    bitonic_sort_inner
     vmovdqa [rdi], xmm0
     ret
 
 
-bitonic_sort_inner:
-    nop
-    vmovdqa xmm8, [counting]
-    vmovdqa xmm9, [bitonic_swap + 0]
-    vmovdqa xmm12, [bitonic_flip + 0]
-
-        ; xmm9-12: permutation that swaps the values
-        ; xmm8: list of indices
-        ; xmm7: permutation to broadcast higher index
-        ; xmm0: the working vector
-        ; xmm1: the swapped, then maxed values
-        ; xmm2: the higher index value, xored into xmm0
-
-    vpmaxub xmm7, xmm8, xmm9
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm10, [bitonic_swap + 16]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
-
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm12, [bitonic_flip + 16]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm11, [bitonic_swap + 32]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm12, [bitonic_flip + 32]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm10
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm10
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm11
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm11
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm10
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm10
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpxor xmm0, xmm1
-
-    ret

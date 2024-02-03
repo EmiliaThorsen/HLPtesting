@@ -9,8 +9,8 @@
 // apply the mapping but fast
 extern uint64_t apply_mapping(uint64_t input, uint8_t* map);
 
-// do both the illegal map and distance checks simultaneously
-extern uint64_t check_mapping_fast(uint64_t map, int threshhold);
+// apply the mapping and check the legality
+extern uint64_t apply_and_check(uint64_t input, uint8_t* map, int threshhold);
 
 // faster than non-vectorized quantum bogo sort
 extern void bitonic_sort16x8(uint8_t* array);
@@ -97,7 +97,7 @@ void precomputeLayers(int group) {
     long totalNext = layerCount;
     printf("starting next layer compute\n");
     for(int conf = 0; conf < layerCount; conf++) {
-        uint64_t layerOut = layer(startPos, layerConf[conf]);
+        uint64_t layerOut = apply_mapping(startPos, layers[conf]);
         int nextLayerSize = 0;
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
             uint64_t nextLayerOut = apply_mapping(layerOut, layers[conf2]);
@@ -127,18 +127,9 @@ uint64_t avx_rerun(uint64_t input, uint8_t* map) {
 }
 
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
-uint64_t fastLayer(uint64_t input, int configuration) {
+uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
     iter++;
-    uint64_t output =  apply_mapping(input, layers[configuration]);
-    return output;
-    uint8_t mappings[16] = {69,69,69,69,69,69,69,69,69,69,69,69,69,69,69,69};
-    uint8_t *specificLayer = layers[configuration];
-    for(int i = 0; i < 16; i++) {
-        uint8_t result = specificLayer[(input >> (i << 2)) & 15];
-        if(mappings[result] != goal[i] & mappings[result] != 69) return 0;
-        mappings[result] = goal[i];
-    }
-    return output;
+    return apply_and_check(input, layers[configuration], threshhold);
 }
 
 
@@ -150,42 +141,11 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
         uint8_t *specificLayer = layers[l];
         iter++;
         if (apply_mapping(startPos, layers[l]) != wanted) continue;
-        /*
-        for(int i = 0; i < 16; i++) {
-            if(specificLayer[(startPos >> (i << 2)) & 15] != goal[i]) goto wrong;
-        }*/
         printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
         return 1;
-        //wrong: continue;
     }
     return 0;
 }
-
-int cmpfunc (const void * a, const void * b) {
-   return ( *(int*)a - *(int*)b );
-}
-
-int abs(x) {
-    if(x < 0) return -x;
-    return x;
-}
-
-//aproximate distance function using precomputed tables
-int distCheck(uint64_t input, int threshhold) {
-    uint8_t arr[16];
-    for(int i = 0; i < 16; i++) { //zip(start, goal)
-        arr[i] = (((input >> (i << 2)) & 15) << 4) | (goal[i] & 15);
-    }
-    bitonic_sort16x8(arr);
-    //qsort(arr, 16, sizeof(int), cmpfunc); //sorted()
-    int total = 0;
-    for(int i = 0; i < 15; i++) {//"big jump" magic
-        if(abs((arr[i] & 15) - (arr[i + 1] & 15)) > abs(((arr[i] >> 4) & 15) - ((arr[i + 1] >> 4) & 15))) total++;
-    }
-    if(total > threshhold) return 1; //if distance is too far return 1 to prune it
-    return 0;
-}
-
 
 //cache related code, used for removing identical or worse solutions
 long sameDeapthHits = 0;
@@ -224,9 +184,10 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     int dedupeArrSize = 0;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int i = nextValidLayers[prevLayerConf * 800 + conf];
-        uint64_t output = fastLayer(startPos, i);
+        uint64_t output = fastLayer(startPos, i, currLayer - deapth - 1);
+        if (output == 0) continue;
 
-        if(check_mapping_fast(output, currLayer - deapth - 1)) continue;
+        /* if(check_mapping_fast(output)) continue; */
 
         //cashe check
         if(casheCheck(output, deapth)) continue;

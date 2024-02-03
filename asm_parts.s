@@ -280,9 +280,9 @@ apply_mapping:
 
         ; get and apply mapping
     vmovdqa xmm3, [rsi]
-    vpshufb xmm0, [uint2xmm_perm]
+    ; vpshufb xmm0, [uint2xmm_perm]
     vpshufb xmm0, xmm3, xmm0
-    vpshufb xmm0, [xmm2uint_perm]
+    ; vpshufb xmm0, [xmm2uint_perm]
 
         ; pack it up and go
     vpsrldq xmm1, xmm0, 8
@@ -303,9 +303,9 @@ apply_and_check:
 
         ; get and apply mapping
     vmovdqa xmm3, [rsi]
-    vpshufb xmm0, [uint2xmm_perm]
+    ; vpshufb xmm0, [uint2xmm_perm]
     vpshufb xmm0, xmm3, xmm0
-    vpshufb xmm0, [xmm2uint_perm]
+    ; vpshufb xmm0, [xmm2uint_perm]
 
         ; pack it up and go
     vpsrldq xmm1, xmm0, 8
@@ -313,7 +313,7 @@ apply_and_check:
     vpor xmm1, xmm0
     vmovq rax, xmm1
 
-    vpshufb xmm0, [uint2xmm_r_perm]
+    ; vpshufb xmm0, [uint2xmm_r_perm]
 
         ; prepare for sorting
     vpsllq xmm0, 4

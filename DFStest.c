@@ -6,14 +6,12 @@
 #include <time.h>
 #include <x86intrin.h>
 
-// apply the mapping but fast
 extern uint64_t apply_mapping(uint64_t input, uint8_t* map);
-
-// apply the mapping and check the legality
 extern uint64_t apply_and_check(uint64_t input, uint8_t* map, int threshhold);
-
-// faster than non-vectorized quantum bogo sort
 extern void bitonic_sort16x8(uint8_t* array);
+extern uint64_t array_to_uint(uint8_t* array);
+extern void pretty_uint_to_array(uint64_t uint, uint8_t* array);
+extern void store_mapping(uint64_t map, uint8_t* location);
 
 //naive implementation of a layer
 int max(int a, int b) {return a > b ? a : b;}
@@ -47,12 +45,14 @@ uint64_t layer(uint64_t input, int configuration) {
 }
 
 
-uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
+//uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
+uint64_t startPos = 0xf7e6d5c4b3a29180; //how bout i do anyway
 
 //the goal you want to search to
 uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
 
 uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
+uint64_t goal_uint; //trust me
 
 //precomputed layer lookup tables
 uint8_t *layers[800];
@@ -88,7 +88,8 @@ void precomputeLayers(int group) {
         layerConf[layerCount] = conf;
         nextValidLayers[799 * 800 + layerCount] = layerCount;
         uint8_t *specificLayer = malloc(16);
-        for(int i = 0; i < 16; i++) specificLayer[15 - i] = (output >> (i * 4)) & 15;
+        store_mapping(output, specificLayer);
+        /* for(int i = 0; i < 16; i++) specificLayer[15 - i] = (output >> (i * 4)) & 15; */
         layers[layerCount] = specificLayer;
         layerCount++;
         skip: continue;
@@ -140,7 +141,7 @@ int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
         uint8_t *specificLayer = layers[l];
         iter++;
-        if (apply_mapping(startPos, layers[l]) != wanted) continue;
+        if (apply_mapping(startPos, layers[l]) != goal_uint) continue;
         printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
         return 1;
     }
@@ -207,7 +208,9 @@ void search() {
     precomputeLayers(getGroup(wanted));
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
-    for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15;
+    pretty_uint_to_array(wanted, goal);
+    goal_uint = array_to_uint(goal);
+    /* for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15; */
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
         if(dfs(startPos, 0, 799)) break;

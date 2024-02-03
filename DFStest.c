@@ -7,14 +7,16 @@
 #include <x86intrin.h>
 #include <stdbool.h>
 
-extern uint64_t apply_mapping(uint64_t input, uint8_t* map);
-extern uint64_t apply_and_check(uint64_t input, uint8_t* map, int threshhold);
-extern void bitonic_sort16x8(uint8_t* array);
-extern uint64_t array_to_uint(uint8_t* array);
-extern void pretty_uint_to_array(uint64_t uint, uint8_t* array);
-extern void store_mapping(uint64_t map, uint8_t* location);
+/* extern uint64_t apply_mapping(uint64_t input, uint8_t* map); */
+/* extern void bitonic_sort16x8(uint8_t* array); */
+/* extern uint64_t array_to_uint(uint8_t* array); */
+extern void uint_to_array(uint64_t uint, uint8_t* array);
+/* extern void pretty_uint_to_array(uint64_t uint, uint8_t* array); */
+/* extern void store_mapping(uint64_t map, uint8_t* location); */
 
 extern uint64_t layer(uint64_t map, uint16_t config);
+extern uint64_t apply_and_check(uint64_t input, uint16_t config, int threshhold);
+/* extern uint64_t check(uint64_t input, int threshhold); */
 
 
 extern void batch_apply(
@@ -78,32 +80,8 @@ uint64_t discount_simd_comparator(uint64_t back, uint64_t side, bool mode) {
     return low | (high << 4);
 }
 
-/*
-uint64_t layer(uint64_t input, int configuration) {
-    return layer_vec(input, configuration);
-    uint8_t ss = configuration & 0xff;
-    switch ((configuration >> 8) & 7) {
-        case 0: return layer_inner_cc(input, ss);
-        case 1: return layer_inner_sc(input, ss);
-        case 2: return layer_inner_cs(input, ss);
-        case 3: return layer_inner_ss(input, ss);
-        //case 4: case 5: return layer_inner_rot_sc(input, ss);
-    }
-    uint64_t ss1 = broadcast16 * ((configuration) & 15);
-    uint64_t ss2 = broadcast16 * ((configuration >> 4) & 15);
-    switch ((configuration >> 8) & 7) {
-        case 0: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(input, ss2, 0));
-        case 1: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(input, ss2, 0));
-        case 2: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(input, ss2, 1));
-        case 3: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(input, ss2, 1));
-        case 4: return discount_simd_max(discount_simd_comparator(ss1, input, 1), discount_simd_comparator(ss2, input, 0));
-        case 5: return discount_simd_max(discount_simd_comparator(ss1, input, 0), discount_simd_comparator(ss2, input, 1));
-    }
-}
-*/
-
-//uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
-uint64_t startPos = 0xf7e6d5c4b3a29180; //how bout i do anyway
+uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
+//uint64_t startPos = 0xf7e6d5c4b3a29180; //how bout i do anyway
 
 //the goal you want to search to
 uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
@@ -112,7 +90,7 @@ uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
 uint64_t goal_uint; //trust me
 
 //precomputed layer lookup tables
-uint8_t *layers[800];
+/* uint8_t *layers[800]; */
 uint16_t layerConf[800];
 uint8_t fineAsLastLayer[800];
 uint16_t nextValidLayers[800*800];
@@ -144,9 +122,9 @@ void precomputeLayers(int group) {
         totalNextLayers[layerCount] = output;
         layerConf[layerCount] = conf;
         nextValidLayers[799 * 800 + layerCount] = layerCount;
-        uint8_t *specificLayer = malloc(16);
-        store_mapping(output, specificLayer);
-        layers[layerCount] = specificLayer;
+        /* uint8_t *specificLayer = malloc(16); */
+        /* store_mapping(output, specificLayer); */
+        /* layers[layerCount] = specificLayer; */
         layerCount++;
         skip: continue;
     }
@@ -177,16 +155,15 @@ long iter = 0;
 
 int currLayer = 1;
 
-int mismatches;
-
-uint64_t avx_rerun(uint64_t input, uint8_t* map) {
-    apply_mapping(input, map);
-}
+int mismatches = 0;
 
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
 uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
     iter++;
-    return apply_and_check(input, layers[configuration], threshhold);
+    return apply_and_check(input, layerConf[configuration], threshhold);
+    /* uint64_t output = layer(input, layerConf[configuration]); */
+    /* if (!check(output, threshhold)) return 0; */
+    /* return output; */
 }
 
 
@@ -195,9 +172,9 @@ uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
 int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
         int l = nextValidLayers[prevLayerConf * 800 + conf];
-        uint8_t *specificLayer = layers[l];
+        /* uint8_t *specificLayer = layers[l]; */
         iter++;
-        if (apply_mapping(startPos, layers[l]) != goal_uint) continue;
+        if (layer(startPos, layerConf[l]) != wanted) continue;
         printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
         return 1;
     }
@@ -263,9 +240,9 @@ void search() {
     precomputeLayers(getGroup(wanted));
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
-    pretty_uint_to_array(wanted, goal);
-    goal_uint = array_to_uint(goal);
-    /* for(int i = 0; i < 16; i++) goal[i] = (wanted >> (i * 4)) & 15; */
+    uint_to_array(wanted, goal);
+    /* goal_uint = array_to_uint(goal); */
+    /* for(int i = 0; i < 16; i++) goal[i] = (wanted >> ((15 - i) * 4)) & 15; */
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
         if(dfs(startPos, 0, 799)) break;

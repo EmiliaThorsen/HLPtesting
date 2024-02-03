@@ -3,13 +3,14 @@ BITS 64
 %use altreg
 
 global apply_and_check; input, configuration, threshold
-global bitonic_sort16x8; pointer to byte array
-global pretty_uint_to_array; uint, array
+; global bitonic_sort16x8; pointer to byte array
+; global pretty_uint_to_array; uint, array
 global array_to_uint, uint_to_array
-global apply_mapping, store_mapping
-global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
+; global apply_mapping, store_mapping
+; global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
 global layer
+global check
 
 extern goal
 
@@ -38,17 +39,17 @@ xmm2uint_perm: db 15,13,11,9,7,5,3,1,14,12,10,8,6,4,2,0
 
 section .text
 
-layer:
+%macro apply_basic 0
         ; rdi: map
         ; si: config (RABaaaabbbb, b being the side comparator)
 
         ; unpack map
     vmovq xmm0, rdi
-    vmovdqa ymm7, [low_byte_mask]
+    vmovdqa xmm8, [low_byte_mask]
     vpslldq xmm1, xmm0, 8
     vpsrlq xmm1, 4
     vpor xmm0, xmm1
-    vpand xmm0, xmm7
+    vpand xmm0, xmm8
 
         ; unpack config
         ; adjust mode if rotated
@@ -61,8 +62,8 @@ layer:
     vmovd xmm4, esi
     vpbroadcastb xmm2, xmm4
     vpsrlq xmm3, xmm2, 4
-    vpand xmm2, xmm7
-    vpand xmm3, xmm7
+    vpand xmm2, xmm8
+    vpand xmm3, xmm8
 
         ; modes & rotation
     vpshufd xmm4, xmm4, 0
@@ -75,7 +76,7 @@ layer:
 
         ; swap if rotated
     vpxor xmm7, xmm0, xmm3
-    vpand xmm6, xmm7
+    vpand xmm6, xmm6, xmm7
     vpxor xmm1, xmm3, xmm6
     vpxor xmm3, xmm0, xmm6
 
@@ -100,83 +101,14 @@ layer:
         ; pack back into return
     vpsrldq xmm1, xmm0, 8
     vpsllq xmm1, 4
-    vpor xmm1, xmm0
+    vpor xmm1, xmm1, xmm0
     vmovq rax, xmm1
-    
-    ret
-
-
-
-        ; idk which way is which lol
-        ; 0: c/c
-        ; 1: s/s
-        ; 2: s/c
-        ; 3: c/s
-        ; 4: rotated c/s
-%macro layer_implementation 1
-        ; lower part ends up in upper lane, i know, weird
-        ; sil: bbbbaaaa
-        ; ymm's: a b (b in the xmm)
-
-    vmovq xmm0, rdi
-    vmovdqa ymm5, [low_byte_mask]
-    vpslldq xmm1, xmm0, 8
-    vpsrlq xmm1, 4
-    vpor xmm0, xmm1
-    vpand xmm0, xmm5
-
-        ; unpack barrels
-    vpcmpeqq xmm2, xmm2
-    vmovd xmm1, esi
-    vpsrlq xmm2, 63
-    vpbroadcastb ymm1, xmm1
-    vpsllq xmm2, 2
-    vpsrlvq ymm1, ymm2
-    vpand ymm1, ymm5
-
-        ; ymm3: backs
-        ; ymm4: sides
-        ; low: forward comparator
-        ; high: side comparator
-%if %1 = 4
-    vmovdqa ymm3, ymm1
-    vpermq ymm4, ymm0, 0x44
-%else
-    vperm2i128 ymm3, ymm1, ymm0, 0x12
-    vperm2i128 ymm4, ymm1, ymm0, 0x20
-%endif
-
-        ; compute comparators
-    vpcmpgtb ymm1, ymm4, ymm3
-%if %1 = 0
-%elif %1 = 1
-    vpsubb ymm3, ymm4
-%else
-
-    vpcmpeqq xmm2, xmm2
-%if %1 = 2
-    vpandn ymm4, ymm2, ymm4
-%else
-    vpand ymm4, ymm2
-%endif
-    vpsubb ymm3, ymm4
-
-%endif
-    vpandn ymm3, ymm1, ymm3
-
-        ; compute max
-    vpermq ymm0, ymm3, 01001110b
-    vpmaxub xmm0, xmm3
-
-        ; pack back into return
-    vpsrldq xmm1, xmm0, 8
-    vpsllq xmm1, 4
-    vpor xmm1, xmm0
-    vmovq rax, xmm1
-    
-    ret
 %endmacro
+    
 
+layer:
+    apply_basic
+    ret
 
 %macro bitonic_sort_inner 0
     nop
@@ -268,22 +200,6 @@ layer:
     vpxor xmm0, xmm1
 %endmacro
 
-layer_inner_cc:
-    layer_implementation 0
-
-layer_inner_ss:
-    layer_implementation 1
-
-layer_inner_sc:
-    layer_implementation 2
-
-layer_inner_cs:
-    layer_implementation 3
-
-layer_inner_rot_sc:
-    layer_implementation 4
-
-
 
 
 
@@ -338,59 +254,21 @@ store_mapping:
     ret
 
 
-apply_mapping:
-        ; unpack the state
-    vmovq xmm0, rdi
-    vmovdqa xmm4, [low_byte_mask]
-    vpslldq xmm2, xmm0, 8
-    vpsrlq xmm2, 4
-    vpand xmm2, xmm4
-    vpand xmm0, xmm4
-    vpor xmm0, xmm2
-
-
-        ; get and apply mapping
-    vmovdqa xmm3, [rsi]
-    ; vpshufb xmm0, [uint2xmm_perm]
-    vpshufb xmm0, xmm3, xmm0
-    ; vpshufb xmm0, [xmm2uint_perm]
-
-        ; pack it up and go
-    vpsrldq xmm1, xmm0, 8
-    vpsllq xmm1, 4
-    vpor xmm1, xmm0
-    vmovq rax, xmm1
-    ret
 
 apply_and_check:
-        ; unpack the state
-    vmovq xmm0, rdi
-    vmovdqa xmm4, [low_byte_mask]
-    vpslldq xmm2, xmm0, 8
-    vpsrlq xmm2, 4
-    vpand xmm2, xmm4
-    vpand xmm0, xmm4
-    vpor xmm0, xmm2
+        ; rdi: map
+        ; si: config
+        ; rdx: threshold
 
-        ; get and apply mapping
-    vmovdqa xmm3, [rsi]
-    ; vpshufb xmm0, [uint2xmm_perm]
-    vpshufb xmm0, xmm3, xmm0
-    ; vpshufb xmm0, [xmm2uint_perm]
-
-        ; pack it up and go
-    vpsrldq xmm1, xmm0, 8
-    vpsllq xmm1, 4
-    vpor xmm1, xmm0
-    vmovq rax, xmm1
-
-    ; vpshufb xmm0, [uint2xmm_r_perm]
+    apply_basic
 
         ; prepare for sorting
     vpsllq xmm0, 4
     vpor xmm0, [goal]
 
     bitonic_sort_inner
+
+    vmovdqa xmm4, [low_byte_mask]
 
     vpsrlq xmm1, xmm0, 4
     vpand xmm0, xmm4
@@ -404,6 +282,7 @@ apply_and_check:
     vpsubb xmm1, xmm3, xmm1
     vpslldq xmm0, 1
     vpslldq xmm1, 1
+
 
         ; xmm0-1: same as before but now deltas
     vpxor xmm5, xmm5

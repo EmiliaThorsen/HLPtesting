@@ -6,11 +6,12 @@ global apply_and_check; input, configuration, threshold
 ; global bitonic_sort16x8; pointer to byte array
 ; global pretty_uint_to_array; uint, array
 global array_to_uint, uint_to_array
+global fix_uint
 ; global apply_mapping, store_mapping
 ; global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
 global layer
-global check
+; global check
 
 extern goal
 
@@ -30,10 +31,12 @@ db 7,6,5,4,3,2,1,0,15,14,13,12,11,10,9,8
 db 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
 
 counting: db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+fix_uint_perm: db 7,15,6,14,5,13,4,12,3,11,2,10,1,9,0,8
+        ; unfix_uint_perm: db 14,12,10,8,6,4,2,0,15,13,11,9,7,5,3,1
 
-uint2xmm_perm: db 15,7,14,6,13,5,12,4,11,3,10,2,9,1,8,0
-uint2xmm_r_perm: db 0,8,1,9,2,10,3,11,4,12,5,13,6,14,7,15
-xmm2uint_perm: db 15,13,11,9,7,5,3,1,14,12,10,8,6,4,2,0
+; uint2xmm_perm: db 15,7,14,6,13,5,12,4,11,3,10,2,9,1,8,0
+; uint2xmm_r_perm: db 0,8,1,9,2,10,3,11,4,12,5,13,6,14,7,15
+; xmm2uint_perm: db 15,13,11,9,7,5,3,1,14,12,10,8,6,4,2,0
 
 ; section .note.GNU-stack,"",@progbits
 
@@ -47,7 +50,7 @@ section .text
     vmovq xmm0, rdi
     vmovdqa xmm8, [low_byte_mask]
     vpslldq xmm1, xmm0, 8
-    vpsrlq xmm1, 4
+    vpsrlq xmm0, 4
     vpor xmm0, xmm1
     vpand xmm0, xmm8
 
@@ -100,8 +103,8 @@ section .text
 
         ; pack back into return
     vpsrldq xmm1, xmm0, 8
-    vpsllq xmm1, 4
-    vpor xmm1, xmm1, xmm0
+    vpsllq xmm2, xmm0, 4
+    vpor xmm1, xmm1, xmm2
     vmovq rax, xmm1
 %endmacro
     
@@ -202,25 +205,32 @@ layer:
 
 
 
-
-pretty_uint_to_array:
+fix_uint:
+        ; unpack map
     vmovq xmm0, rdi
-    vmovdqu xmm4, [low_byte_mask]
+    vmovdqa xmm8, [low_byte_mask]
     vpslldq xmm1, xmm0, 8
-    vpsrlq xmm1, 4
+    vpsrlq xmm0, 4
     vpor xmm0, xmm1
-    vpand xmm0, xmm4
+    vpand xmm0, xmm8
 
-    vpshufb xmm0, [uint2xmm_perm] ; the difference 
+    vmovdqa xmm3, [fix_uint_perm]
+    vpshufb xmm0, xmm0, xmm3
 
-    vmovdqu [rsi], xmm0
+        ; pack back into return
+    vpsrldq xmm1, xmm0, 8
+    vpsllq xmm2, xmm0, 4
+    vpor xmm1, xmm1, xmm2
+    vmovq rax, xmm1
+
     ret
+
 
 uint_to_array:
     vmovq xmm0, rdi
     vmovdqu xmm4, [low_byte_mask]
     vpslldq xmm1, xmm0, 8
-    vpsrlq xmm1, 4
+    vpsrlq xmm0, 4
     vpor xmm0, xmm1
     vpand xmm0, xmm4
 
@@ -232,7 +242,7 @@ array_to_uint:
     vmovdqu xmm0, [rdi]
 
     vpsrldq xmm1, xmm0, 8
-    vpsllq xmm1, 4
+    vpsllq xmm0, 4
     vpor xmm1, xmm0
     vmovq rax, xmm1
 

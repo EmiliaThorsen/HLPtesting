@@ -14,6 +14,9 @@ extern void uint_to_array(uint64_t uint, uint8_t* array);
 /* extern void pretty_uint_to_array(uint64_t uint, uint8_t* array); */
 /* extern void store_mapping(uint64_t map, uint8_t* location); */
 
+// takes a uint from a pretty form to one that works nicely for vectorizing
+extern uint64_t fix_uint(uint64_t uint);
+
 extern uint64_t layer(uint64_t map, uint16_t config);
 extern uint64_t apply_and_check(uint64_t input, uint16_t config, int threshhold);
 /* extern uint64_t check(uint64_t input, int threshhold); */
@@ -87,13 +90,14 @@ uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
 uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
 
 uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
-uint64_t goal_uint; //trust me
+/* uint64_t goal_uint; //trust me */
 
 //precomputed layer lookup tables
 /* uint8_t *layers[800]; */
 uint16_t layerConf[800];
 uint8_t fineAsLastLayer[800];
 uint16_t nextValidLayers[800*800];
+uint16_t nextValidLayerConfs[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
 
@@ -122,6 +126,7 @@ void precomputeLayers(int group) {
         totalNextLayers[layerCount] = output;
         layerConf[layerCount] = conf;
         nextValidLayers[799 * 800 + layerCount] = layerCount;
+        nextValidLayerConfs[799 * 800 + layerCount] = conf;
         /* uint8_t *specificLayer = malloc(16); */
         /* store_mapping(output, specificLayer); */
         /* layers[layerCount] = specificLayer; */
@@ -142,6 +147,7 @@ void precomputeLayers(int group) {
             totalNextLayers[totalNext] = nextLayerOut;
             totalNext++;
             nextValidLayers[conf * 800 + nextLayerSize] = conf2;
+            nextValidLayerConfs[conf * 800 + nextLayerSize] = layerConf[conf2];
             nextLayerSize++;
             nextSkip: continue;
         }
@@ -160,7 +166,7 @@ int mismatches = 0;
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
 uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
     iter++;
-    return apply_and_check(input, layerConf[configuration], threshhold);
+    return apply_and_check(input, configuration, threshhold);
     /* uint64_t output = layer(input, layerConf[configuration]); */
     /* if (!check(output, threshhold)) return 0; */
     /* return output; */
@@ -169,13 +175,13 @@ uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
 
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
-int fastLastLayerSearch(uint64_t startPos, int prevLayerConf) {
-    for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
-        int l = nextValidLayers[prevLayerConf * 800 + conf];
+int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
+    for(int i = 0; i < nextValidLayersSize[prevLayerConf]; i++) {
+        int conf = nextValidLayerConfs[prevLayerConf * 800 + i];
         /* uint8_t *specificLayer = layers[l]; */
         iter++;
-        if (layer(startPos, layerConf[l]) != wanted) continue;
-        printf("deapth: %d configuration: %03hx\n", currLayer - 1, layerConf[l]);
+        if (layer(input, conf) != wanted) continue;
+        printf("deapth: %d configuration: %03hx\n", currLayer - 1, conf);
         return 1;
     }
     return 0;
@@ -218,12 +224,14 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
-        int i = nextValidLayers[prevLayerConf * 800 + conf];
-        uint64_t output = fastLayer(startPos, i, currLayer - deapth - 1);
+        uint16_t config = nextValidLayerConfs[prevLayerConf * 800 + conf];
+        uint64_t output = fastLayer(startPos, config, currLayer - deapth - 1);
         if (output == 0) continue;
 
         //cashe check
         if(casheCheck(output, deapth)) continue;
+
+        int i = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
         if(dfs(output, deapth + 1, i)) {
             printf("deapth: %d configuration: %03hx\n", deapth, layerConf[i]);
@@ -241,8 +249,6 @@ void search() {
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
     printf("starting search!\n");
     uint_to_array(wanted, goal);
-    /* goal_uint = array_to_uint(goal); */
-    /* for(int i = 0; i < 16; i++) goal[i] = (wanted >> ((15 - i) * 4)) & 15; */
     while (1) {
         for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
         if(dfs(startPos, 0, 799)) break;
@@ -261,9 +267,10 @@ void search() {
     printf("total iter over all: %ld\n", iter);
 }
 
-const uint64_t pretty_start = 0xfedcba9876543210;
-
 int main() {
+
+    wanted = fix_uint(wanted);
+    startPos = fix_uint(startPos);
 
     //alocating the cache
     int casheSize = 25;

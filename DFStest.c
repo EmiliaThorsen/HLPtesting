@@ -5,9 +5,10 @@
 #include <sys/types.h>
 #include <time.h>
 #include <x86intrin.h>
+#include "aa_tree.h"
 #include <stdbool.h>
 
-/* extern uint64_t apply_mapping(uint64_t input, uint8_t* map); */
+extern uint64_t apply_mapping(uint64_t input, uint64_t map);
 /* extern void bitonic_sort16x8(uint8_t* array); */
 /* extern uint64_t array_to_uint(uint8_t* array); */
 extern void uint_to_array(uint64_t uint, uint8_t* array);
@@ -18,7 +19,7 @@ extern void uint_to_array(uint64_t uint, uint8_t* array);
 extern uint64_t fix_uint(uint64_t uint);
 
 extern uint64_t layer(uint64_t map, uint16_t config);
-extern uint64_t apply_and_check(uint64_t input, uint16_t config, int threshhold);
+extern uint64_t apply_and_check(uint64_t input, uint64_t map, int threshhold);
 /* extern uint64_t check(uint64_t input, int threshhold); */
 
 
@@ -41,17 +42,6 @@ extern int search_last_layer(
         uint64_t start,
         uint16_t* configurations,
         int quantity);
-
-//naive implementation of a layer
-int max(int a, int b) {return a > b ? a : b;}
-
-int compMode(int back, int side) {return (back >= side) * back;}
-
-int subMode(int back, int side) {
-    int dif = back - side;
-    if(dif > 0) return dif;
-    return 0;
-}
 
 
 const uint64_t broadcast8 = 0x0101010101010101;
@@ -93,11 +83,9 @@ uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
 /* uint64_t goal_uint; //trust me */
 
 //precomputed layer lookup tables
-/* uint8_t *layers[800]; */
 uint16_t layerConf[800];
-uint8_t fineAsLastLayer[800];
 uint16_t nextValidLayers[800*800];
-uint16_t nextValidLayerConfs[800*800];
+uint64_t nextValidLayerLuts[800*800];
 int nextValidLayersSize[800];
 int layerCount = 0;
 
@@ -114,45 +102,49 @@ int getGroup(uint64_t x) {
     return group;
 }
 
+int cmpfunc (void * a, void * b) {
+   return ( *(uint64_t*)a - *(uint64_t*)b );
+}
+
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
 void precomputeLayers(int group) {
     printf("starting layer precompute\n");
-    uint64_t totalNextLayers[800*800];
+    int64_t flag;
+    aatree_node* uniqueNextLayersTree = aa_tree_insert(startPos, NULL, &flag);
+
     for(int conf = 0; conf < 1536; conf++) {
         uint64_t output = layer(startPos, conf);
-        if(output == startPos) continue;
+        /* if(output == startPos) continue; */
         if(getGroup(output) < group) continue;
-        for(int i = 0; i < layerCount; i++) if(totalNextLayers[i] == output) goto skip;
-        totalNextLayers[layerCount] = output;
+        if (aa_tree_search(uniqueNextLayersTree, output)) continue;
+
         layerConf[layerCount] = conf;
         nextValidLayers[799 * 800 + layerCount] = layerCount;
-        nextValidLayerConfs[799 * 800 + layerCount] = conf;
-        /* uint8_t *specificLayer = malloc(16); */
-        /* store_mapping(output, specificLayer); */
-        /* layers[layerCount] = specificLayer; */
+        nextValidLayerLuts[799 * 800 + layerCount] = output;
+        uniqueNextLayersTree = aa_tree_insert(output, uniqueNextLayersTree, &flag);
         layerCount++;
-        skip: continue;
     }
     nextValidLayersSize[799] = layerCount;
     long totalNext = layerCount;
     printf("starting next layer compute\n");
     for(int conf = 0; conf < layerCount; conf++) {
-        uint64_t layerOut = layer(startPos, layerConf[conf]);
+        uint64_t layerOut = nextValidLayerLuts[799*800 + conf];
         int nextLayerSize = 0;
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
-            uint64_t nextLayerOut = layer(layerOut, layerConf[conf2]);
-            if(nextLayerOut == startPos) continue;
+            uint64_t nextLayerOut = apply_mapping(layerOut, nextValidLayerLuts[799*800 + conf2]);
+            /* uint64_t nextLayerOut = layer(layerOut, conf2); */
             if(getGroup(nextLayerOut) < group) continue;
-            for(int i = 0; i < totalNext; i++) if(totalNextLayers[i] == nextLayerOut) goto nextSkip;
-            totalNextLayers[totalNext] = nextLayerOut;
-            totalNext++;
+            if (aa_tree_search(uniqueNextLayersTree, nextLayerOut)) continue;
+
             nextValidLayers[conf * 800 + nextLayerSize] = conf2;
-            nextValidLayerConfs[conf * 800 + nextLayerSize] = layerConf[conf2];
+            nextValidLayerLuts[conf * 800 + nextLayerSize] = nextValidLayerLuts[799*800 + conf2];
+            uniqueNextLayersTree = aa_tree_insert(nextLayerOut, uniqueNextLayersTree, &flag);
+            totalNext++;
             nextLayerSize++;
-            nextSkip: continue;
         }
         nextValidLayersSize[conf] = nextLayerSize;
     }
+    aa_tree_free(uniqueNextLayersTree);
     printf("layers computed:%d, total next layers:%ld\n", layerCount, totalNext - layerCount);
 }
 
@@ -164,12 +156,9 @@ int currLayer = 1;
 int mismatches = 0;
 
 //fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
-uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
+uint64_t fastLayer(uint64_t input, uint64_t map, int threshhold) {
     iter++;
-    return apply_and_check(input, configuration, threshhold);
-    /* uint64_t output = layer(input, layerConf[configuration]); */
-    /* if (!check(output, threshhold)) return 0; */
-    /* return output; */
+    return apply_and_check(input, map, threshhold);
 }
 
 
@@ -177,11 +166,11 @@ uint64_t fastLayer(uint64_t input, int configuration, int threshhold) {
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
 int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
     for(int i = 0; i < nextValidLayersSize[prevLayerConf]; i++) {
-        int conf = nextValidLayerConfs[prevLayerConf * 800 + i];
-        /* uint8_t *specificLayer = layers[l]; */
         iter++;
-        if (layer(input, conf) != wanted) continue;
-        printf("deapth: %d configuration: %03hx\n", currLayer - 1, conf);
+        if (apply_mapping(input, nextValidLayerLuts[prevLayerConf * 800 + i]) != wanted) continue;
+
+        uint16_t config = layerConf[nextValidLayers[prevLayerConf * 800 + i]];
+        printf("deapth: %d configuration: %03hx\n", currLayer - 1, config);
         return 1;
     }
     return 0;
@@ -224,8 +213,8 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
     for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
-        uint16_t config = nextValidLayerConfs[prevLayerConf * 800 + conf];
-        uint64_t output = fastLayer(startPos, config, currLayer - deapth - 1);
+        uint64_t map = nextValidLayerLuts[prevLayerConf * 800 + conf];
+        uint64_t output = fastLayer(startPos, map, currLayer - deapth - 1);
         if (output == 0) continue;
 
         //cashe check

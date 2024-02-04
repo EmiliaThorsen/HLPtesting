@@ -7,7 +7,7 @@ global apply_and_check; input, configuration, threshold
 ; global pretty_uint_to_array; uint, array
 global array_to_uint, uint_to_array
 global fix_uint
-; global apply_mapping, store_mapping
+global apply_mapping, store_mapping
 ; global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
 global layer
@@ -42,7 +42,7 @@ fix_uint_perm: db 7,15,6,14,5,13,4,12,3,11,2,10,1,9,0,8
 
 section .text
 
-%macro apply_basic 0
+%macro layer_basic 0
         ; rdi: map
         ; si: config (RABaaaabbbb, b being the side comparator)
 
@@ -110,7 +110,7 @@ section .text
     
 
 layer:
-    apply_basic
+    layer_basic
     ret
 
 %macro bitonic_sort_inner 0
@@ -241,8 +241,10 @@ uint_to_array:
 array_to_uint:
     vmovdqu xmm0, [rdi]
 
+    vmovdqa xmm2, [low_byte_mask]
     vpsrldq xmm1, xmm0, 8
     vpsllq xmm0, 4
+    vpand xmm0, xmm2
     vpor xmm1, xmm0
     vmovq rax, xmm1
 
@@ -250,27 +252,53 @@ array_to_uint:
 
 
 store_mapping:
-        ; unpack the state
     vmovq xmm0, rdi
-    vmovdqa xmm4, [low_byte_mask]
-    vpslldq xmm2, xmm0, 8
-    vpsrlq xmm2, 4
-    vpand xmm2, xmm4
-    vpand xmm0, xmm4
-    vpor xmm0, xmm2
+    vmovdqa xmm2, [low_byte_mask]
+    vpslldq xmm1, xmm0, 8
+    vpsrlq xmm0, 4
+    vpor xmm0, xmm1
+    vpand xmm0, xmm2
 
-        ; okay that's it lol
     vmovdqu [rsi], xmm0
+
+    ret
+
+%macro apply_map_basic 0
+        ;vpermq?
+    vmovq xmm0, rdi
+    vmovq xmm2, rsi
+    vmovdqa xmm4, [low_byte_mask]
+    vpslldq xmm1, xmm0, 8
+    vpslldq xmm3, xmm2, 8
+    vpsrlq xmm0, 4
+    vpsrlq xmm2, 4
+    vpor xmm0, xmm1
+    vpor xmm2, xmm3
+    vpand xmm0, xmm4
+    vpand xmm2, xmm4
+    
+    vpshufb xmm0, xmm2, xmm0
+
+    vpsrldq xmm1, xmm0, 8
+    vpsllq xmm2, xmm0, 4
+    vpor xmm1, xmm2
+    ; vpand xmm0, xmm4
+    vmovq rax, xmm1
+%endmacro
+
+apply_mapping:
+    apply_map_basic
     ret
 
 
-
 apply_and_check:
-        ; rdi: map
-        ; si: config
+        ; rdi: input
+        ; rsi: map
         ; rdx: threshold
 
-    apply_basic
+    apply_map_basic
+
+    ; call apply_mapping
 
         ; prepare for sorting
     vpsllq xmm0, 4

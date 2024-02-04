@@ -23,13 +23,15 @@ barrel_unpack_shifts: dq 4,4,0,0
 last_layer_unpack_shifts: dq 4,0,4,0
 ; mode_unpack_shifts: dq 31,31,0,0
 
-bitonic_swap: db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
-db 2,3,0,1,6,7,4,5,10,11,8,9,14,15,12,13
-db 4,5,6,7,0,1,2,3,12,13,14,15,8,9,10,11
+bitonic_swap:
+times 2 db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
+times 2 db 2,3,0,1,6,7,4,5,10,11,8,9,14,15,12,13
+times 2 db 4,5,6,7,0,1,2,3,12,13,14,15,8,9,10,11
 
-bitonic_flip: db 3,2,1,0,7,6,5,4,11,10,9,8,15,14,13,12
-db 7,6,5,4,3,2,1,0,15,14,13,12,11,10,9,8
-db 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
+bitonic_flip:
+times 2 db 3,2,1,0,7,6,5,4,11,10,9,8,15,14,13,12
+times 2 db 7,6,5,4,3,2,1,0,15,14,13,12,11,10,9,8
+times 2 db 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
 
 counting: db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 fix_uint_perm: db 7,15,6,14,5,13,4,12,3,11,2,10,1,9,0,8
@@ -114,94 +116,75 @@ layer:
     layer_basic
     ret
 
-%macro bitonic_sort_inner 0
-    nop
-    vmovdqa xmm8, [counting]
-    vmovdqa xmm9, [bitonic_swap + 0]
-    vmovdqa xmm12, [bitonic_flip + 0]
+%macro bitonic_sort_step 3
+        ; %1: type of mm
+        ; %2: how many at once
+        ; %3: which mm to use for swapping
 
-        ; xmm9-12: permutation that swaps the values
+        ; the strange method used here is because: 1) it improves the pipeline,
+        ; and 2) it reduces the total memory loads needed as we don't need a
+        ; mask
+
+%if %2 = 1
+    vpmaxub %1mm7, %1mm8, %1mm%3
+    vpshufb %1mm1, %1mm0, %1mm%3
+    vpshufb %1mm2, %1mm0, %1mm7
+    vpmaxub %1mm1, %1mm0
+    vpxor %1mm0, %1mm2
+    vpxor %1mm0, %1mm1
+%else
+    vpmaxub %1mm7, %1mm8, %1mm%3
+
+    vpshufb %1mm2, %1mm0, %1mm%3
+    vpshufb %1mm3, %1mm1, %1mm%3
+
+    vpshufb %1mm4, %1mm0, %1mm7
+    vpshufb %1mm5, %1mm1, %1mm7
+
+    vpmaxub %1mm2, %1mm0
+    vpmaxub %1mm3, %1mm1
+
+    vpxor %1mm0, %1mm4
+    vpxor %1mm1, %1mm5
+
+    vpxor %1mm0, %1mm2
+    vpxor %1mm1, %1mm3
+%endif
+%endmacro
+
+%macro bitonic_sort_main 2
+        ; %1: type of mm
+        ; %2: how many simultaneously (1-2)
+        ; clobbers mm 1-2(2-5 if %2=2), 7-12
+        ; in: mm0 (&mm1)
+        ; out: mm0 (&mm1), sorted
+    nop
+    vmovdqa %1mm8, [counting]
+    vmovdqa %1mm9, [bitonic_swap + 0]
+    vmovdqa %1mm12, [bitonic_flip + 0]
+
+        ; xmm9-14: permutation that swaps the values
         ; xmm8: list of indices
         ; xmm7: permutation to broadcast higher index
         ; xmm0: the working vector
         ; xmm1: the swapped, then maxed values
         ; xmm2: the higher index value, xored into xmm0
 
-    vpmaxub xmm7, xmm8, xmm9
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm10, [bitonic_swap + 16]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
+    bitonic_sort_step %1,%2,9
+    bitonic_sort_step %1,%2,12
+    vmovdqa %1mm12, [bitonic_flip + 32]
+    bitonic_sort_step %1,%2,9
+    vmovdqa %1mm10, [bitonic_swap + 32]
+    bitonic_sort_step %1,%2,12
+    vmovdqa %1mm12, [bitonic_flip + 64]
+    bitonic_sort_step %1,%2,10
+    vmovdqa %1mm11, [bitonic_swap + 64]
+    bitonic_sort_step %1,%2,9
+    bitonic_sort_step %1,%2,12
+    bitonic_sort_step %1,%2,11
+    bitonic_sort_step %1,%2,10
+    bitonic_sort_step %1,%2,9
 
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm12, [bitonic_flip + 16]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm11, [bitonic_swap + 32]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vmovdqa xmm12, [bitonic_flip + 32]
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm10
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm10
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm12
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm12
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm11
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm11
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm10
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm10
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpmaxub xmm7, xmm8, xmm9
-    vpxor xmm0, xmm1
-    
-    vpshufb xmm1, xmm0, xmm9
-    vpshufb xmm2, xmm0, xmm7
-    vpmaxub xmm1, xmm0
-    vpxor xmm0, xmm2
-    vpxor xmm0, xmm1
 %endmacro
 
 
@@ -305,7 +288,7 @@ apply_and_check:
     vpsllq xmm0, 4
     vpor xmm0, [goal]
 
-    bitonic_sort_inner
+    bitonic_sort_main x,1
 
     vmovdqa xmm4, [low_byte_mask]
 
@@ -346,7 +329,7 @@ apply_and_check:
 
 bitonic_sort16x8:
     vmovdqa xmm0, [rdi]
-    bitonic_sort_inner
+    bitonic_sort_main x,1
     vmovdqa [rdi], xmm0
     ret
 
@@ -406,7 +389,7 @@ search_last_layer:
     vpxor ymm0, ymm14
     vpxor ymm1, ymm14
 
-    vptest ymm5, ymm0
+    vptest ymm5, ymm1
     setz r10b
     setc r11b
     or r8, r10
@@ -414,7 +397,7 @@ search_last_layer:
     shl r8, 1
     shl r9, 1
 
-    vptest ymm5, ymm1
+    vptest ymm5, ymm0
     setz r10b
     setc r11b
     or r8, r10
@@ -433,16 +416,14 @@ search_last_layer:
 
     xor rdx, rdx
         ; determine what made the loop end
-    shl r8, 2
+    shl r9, 2
     or r8, r9
 
         ; see if there were any matches
         ; if not, return -1, else return the actual index
     setz dl
     neg rdx
-    bsf r8, r8
-    mov rax, 3
-    sub rax, r8
+    bsf rax, r8
     add rax, 4
     sub rcx, rsi
     shr rcx, 3

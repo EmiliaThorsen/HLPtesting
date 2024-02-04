@@ -1,14 +1,22 @@
 
+# uncomment for debug
+# DEBUG := 1
 
-a.out: DFStest.o asm_parts.o aa_tree.o
-	gcc *.o -g -z noexecstack
+FLAGS := 
 
-aa_tree.o: aa_tree.c
-	gcc -o aa_tree.o aa_tree.c -O3 -march=native -c -g
+ifdef DEBUG
+	FLAGS += -g
+endif
 
-DFStest.o: DFStest.c
-	gcc -o DFStest.o DFStest.c -O3 -march=native -c -g
+a.out: DFStest.o asm_parts.o aa_tree.o makefile
+	gcc *.o -z noexecstack $(FLAGS)
 
-asm_parts.o: asm_parts.s
-	nasm -o asm_parts.o asm_parts.s -felf64 -g
+aa_tree.o: aa_tree.c makefile
+	gcc -o aa_tree.o aa_tree.c -O3 -march=native -c $(FLAGS)
+
+DFStest.o: DFStest.c makefile aa_tree.h
+	gcc -o DFStest.o DFStest.c -O3 -march=native -c $(FLAGS)
+
+asm_parts.o: asm_parts.s makefile
+	nasm -o asm_parts.o asm_parts.s -felf64 $(FLAGS)
 

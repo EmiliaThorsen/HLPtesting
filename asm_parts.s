@@ -11,7 +11,7 @@ global apply_mapping, store_mapping
 ; global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
 global layer
-; global check
+global search_last_layer
 
 extern goal
 
@@ -20,6 +20,7 @@ section .data
 align 32
 low_byte_mask: times 32 db 15
 barrel_unpack_shifts: dq 4,4,0,0
+last_layer_unpack_shifts: dq 4,0,4,0
 ; mode_unpack_shifts: dq 31,31,0,0
 
 bitonic_swap: db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
@@ -349,4 +350,102 @@ bitonic_sort16x8:
     vmovdqa [rdi], xmm0
     ret
 
+
+search_last_layer:
+        ; rdi: input
+        ; rsi: maps
+        ; rdx: quantity
+        ; rcx: goal
+
+    vmovq xmm0, rdi
+    vmovq xmm2, rcx
+    mov rcx, rdx
+    dec rcx
+    shr rcx, 2
+    shl rcx, 5
+    add rcx, rsi
+
+    vmovdqa ymm7, [low_byte_mask]
+    vpslldq xmm1, xmm0, 8
+    vpslldq xmm3, xmm2, 8
+    vpsrlq xmm0, 4
+    vpsrlq xmm2, 4
+    vpor xmm0, xmm1
+    vpor xmm2, xmm3
+    vpand xmm0, xmm7
+    vpand xmm2, xmm7
+    vpermq ymm15, ymm0, 0x44
+    vpermq ymm14, ymm2, 0x44
+        ; ymm15: input
+        ; ymm14: goal
+
+    xor rax, rax
+    xor r8, r8
+    xor r9, r9
+    xor r10, r10
+    xor r11, r11
+
+    vpcmpeqq xmm5, xmm5, xmm5
+    vmovdqa ymm4, [last_layer_unpack_shifts]
+
+.loop:
+        ; unpack the maps
+    vmovdqu ymm6, [rcx]
+    vpshufd ymm0, ymm6, 0x44
+    vpshufd ymm1, ymm6, 0xee
+    vpsrlvq ymm0, ymm4
+    vpsrlvq ymm1, ymm4
+    vpand ymm0, ymm7
+    vpand ymm1, ymm7
+    
+        ; apply the maps
+    vpshufb ymm0, ymm0, ymm15
+    vpshufb ymm1, ymm1, ymm15
+
+        ; test if any of the results were a match
+    vpxor ymm0, ymm14
+    vpxor ymm1, ymm14
+
+    vptest ymm5, ymm0
+    setz r8b
+    setc r10b
+
+    vptest ymm5, ymm1
+    setz r9b
+    setc r11b
+
+        ; test if we have reached the end
+    sub rcx, 32
+    cmp rcx, rsi
+    setl al
+
+        ; unified loop condition
+    or r8, r9
+    or r10, r11
+    or r8, r10
+    or rax, r8
+
+    jz .loop
+
+    xor rdx, rdx
+        ; determine what made the loop end
+        ; make sure that for r8-11, each register has the previous ones on too
+    or r9, r10
+        ; count up the ones
+    add r8, r9
+    add r10, r11
+    add r8, r10
+
+        ; see if there were any matches
+        ; if not, return -1, else return the actual index
+    setz dl
+    mov rax, r8
+    add rax, 3
+    sub rcx, rsi
+    shr rcx, 3
+    add rax, rcx
+    neg rdx
+    or rax, rdx
+
+    ret
 

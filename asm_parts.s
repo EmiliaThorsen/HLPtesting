@@ -407,12 +407,18 @@ search_last_layer:
     vpxor ymm1, ymm14
 
     vptest ymm5, ymm0
-    setz r8b
-    setc r10b
+    setz r10b
+    setc r11b
+    or r8, r10
+    or r9, r11
+    shl r8, 1
+    shl r9, 1
 
     vptest ymm5, ymm1
-    setz r9b
+    setz r10b
     setc r11b
+    or r8, r10
+    or r9, r11
 
         ; test if we have reached the end
     sub rcx, 32
@@ -420,31 +426,27 @@ search_last_layer:
     setl al
 
         ; unified loop condition
-    or r8, r9
-    or r10, r11
-    or r8, r10
     or rax, r8
+    or rax, r9
 
     jz .loop
 
     xor rdx, rdx
         ; determine what made the loop end
-        ; make sure that for r8-11, each register has the previous ones on too
-    or r9, r10
-        ; count up the ones
-    add r8, r9
-    add r10, r11
-    add r8, r10
+    shl r8, 2
+    or r8, r9
 
         ; see if there were any matches
         ; if not, return -1, else return the actual index
     setz dl
-    mov rax, r8
-    add rax, 3
+    neg rdx
+    bsf r8, r8
+    mov rax, 3
+    sub rax, r8
+    add rax, 4
     sub rcx, rsi
     shr rcx, 3
     add rax, rcx
-    neg rdx
     or rax, rdx
 
     ret

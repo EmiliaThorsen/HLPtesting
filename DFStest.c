@@ -29,13 +29,14 @@ extern void batch_apply(
         uint16_t* configurations,
         int quantity);
 
-extern void batch_apply_and_check(
+extern int batch_apply_and_check(
         uint64_t start,
-        uint16_t* input_maps,
-        uint64_t* output_maps,
+        uint64_t* input_maps,
+        uint16_t* output_ids,
         int quantity,
-        uint64_t goal,
-        int threshhold);
+        int threshhold,
+        uint64_t goal
+        );
 
 extern int search_last_layer(
         uint64_t input,
@@ -74,7 +75,6 @@ uint64_t discount_simd_comparator(uint64_t back, uint64_t side, bool mode) {
 }
 
 uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
-//uint64_t startPos = 0xf7e6d5c4b3a29180; //how bout i do anyway
 
 //the goal you want to search to
 uint64_t wanted = 0x3141592653589793; //0x77239AB34567877E 0x0022002288AA88AA 0x1122334455667788 0x1111222233334444 0x91326754CDFEAB98
@@ -189,7 +189,6 @@ uint8_t *casheDeapthArr;
 uint64_t casheMask;
 
 
-
 int casheCheck(uint64_t output, int deapth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
     if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
@@ -210,22 +209,37 @@ int casheCheck(uint64_t output, int deapth) {
     return 0;
 }
 
+int tmp = 0;
+
 //main dfs recursive search function
 int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
     if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
-    for(int conf = 0; conf < nextValidLayersSize[prevLayerConf]; conf++) {
+    uint16_t potentialLayers[800];
+    iter += nextValidLayersSize[prevLayerConf];
+    int totalNextLayersIdentified = batch_apply_and_check(
+            startPos,
+            nextValidLayerLuts + prevLayerConf*800,
+            potentialLayers,
+            nextValidLayersSize[prevLayerConf],
+            currLayer - deapth - 1,
+            wanted
+            );
+    for(int i = 0; i < totalNextLayersIdentified; i++) {
+        /* int conf = i; */
+        int conf = potentialLayers[i];
         uint64_t map = nextValidLayerLuts[prevLayerConf * 800 + conf];
-        uint64_t output = fastLayer(startPos, map, currLayer - deapth - 1);
-        if (output == 0) continue;
+        uint64_t output = apply_mapping(startPos, map);
+        /* uint64_t output = apply_and_check(startPos, map, currLayer - deapth - 1); */
+        /* if (output == 0) continue; */
 
         //cashe check
         if(casheCheck(output, deapth)) continue;
 
-        int i = nextValidLayers[prevLayerConf * 800 + conf];
+        int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
-        if(dfs(output, deapth + 1, i)) {
-            printf("deapth: %d configuration: %03hx\n", deapth, layerConf[i]);
+        if(dfs(output, deapth + 1, index)) {
+            printf("deapth: %d configuration: %03hx\n", deapth, layerConf[index]);
             return 1;
         }
         if(deapth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
@@ -268,7 +282,7 @@ int main() {
     startPos = fix_uint(startPos);
 
     //alocating the cache
-    int casheSize = 25;
+    int casheSize = 16;
     casheArr = calloc((1 << casheSize), 8);
     casheDeapthArr = calloc((1 << casheSize), 1);
     casheMask = (1 << casheSize) - 1;

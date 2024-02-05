@@ -12,6 +12,7 @@ global apply_mapping, store_mapping
         ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
 global layer
 global search_last_layer
+global batch_apply_and_check
 
 extern goal
 
@@ -20,7 +21,7 @@ section .data
 align 32
 low_byte_mask: times 32 db 15
 barrel_unpack_shifts: dq 4,4,0,0
-last_layer_unpack_shifts: dq 4,0,4,0
+batch_unpack_shifts: dq 4,0,4,0
 ; mode_unpack_shifts: dq 31,31,0,0
 
 bitonic_swap:
@@ -33,13 +34,12 @@ times 2 db 3,2,1,0,7,6,5,4,11,10,9,8,15,14,13,12
 times 2 db 7,6,5,4,3,2,1,0,15,14,13,12,11,10,9,8
 times 2 db 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
 
-counting: db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-fix_uint_perm: db 7,15,6,14,5,13,4,12,3,11,2,10,1,9,0,8
-        ; unfix_uint_perm: db 14,12,10,8,6,4,2,0,15,13,11,9,7,5,3,1
+counting: times 2 db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 
-; uint2xmm_perm: db 15,7,14,6,13,5,12,4,11,3,10,2,9,1,8,0
-; uint2xmm_r_perm: db 0,8,1,9,2,10,3,11,4,12,5,13,6,14,7,15
-; xmm2uint_perm: db 15,13,11,9,7,5,3,1,14,12,10,8,6,4,2,0
+
+        ; align 16
+fix_uint_perm: db 7,15,6,14,5,13,4,12,3,11,2,10,1,9,0,8
+
 
 ; section .note.GNU-stack,"",@progbits
 
@@ -125,68 +125,63 @@ layer:
         ; and 2) it reduces the total memory loads needed as we don't need a
         ; mask
 
-%if %2 = 1
-    vpmaxub %1mm7, %1mm8, %1mm%3
-    vpshufb %1mm1, %1mm0, %1mm%3
-    vpshufb %1mm2, %1mm0, %1mm7
-    vpmaxub %1mm1, %1mm0
-    vpxor %1mm0, %1mm2
-    vpxor %1mm0, %1mm1
-%else
-    vpmaxub %1mm7, %1mm8, %1mm%3
-
+    vpmaxub %1mm8, %1mm9, %1mm%3
     vpshufb %1mm2, %1mm0, %1mm%3
-    vpshufb %1mm3, %1mm1, %1mm%3
-
-    vpshufb %1mm4, %1mm0, %1mm7
-    vpshufb %1mm5, %1mm1, %1mm7
-
+    vpshufb %1mm3, %1mm0, %1mm8
     vpmaxub %1mm2, %1mm0
-    vpmaxub %1mm3, %1mm1
-
-    vpxor %1mm0, %1mm4
-    vpxor %1mm1, %1mm5
-
+    vpxor %1mm0, %1mm3
     vpxor %1mm0, %1mm2
+%if %2 = 2
+    vpshufb %1mm2, %1mm1, %1mm%3
+    vpshufb %1mm3, %1mm1, %1mm8
+    vpmaxub %1mm2, %1mm1
     vpxor %1mm1, %1mm3
+    vpxor %1mm1, %1mm2
 %endif
+%endmacro
+
+%macro bitonic_sort_load 1
+    nop
+    vmovdqa %1mm9, [counting]
+    vmovdqa %1mm10, [bitonic_swap + 0]
+    vmovdqa %1mm11, [bitonic_swap + 32]
+    vmovdqa %1mm12, [bitonic_swap + 64]
+%endmacro
+
+%macro bitonic_sort_loop 2
+    vmovdqa %1mm13, [bitonic_flip + 0]
+    bitonic_sort_step %1,%2,10
+    bitonic_sort_step %1,%2,13
+    vmovdqa %1mm13, [bitonic_flip + 32]
+    bitonic_sort_step %1,%2,10
+    bitonic_sort_step %1,%2,13
+    vmovdqa %1mm13, [bitonic_flip + 64]
+    bitonic_sort_step %1,%2,11
+    bitonic_sort_step %1,%2,10
+    bitonic_sort_step %1,%2,13
+    bitonic_sort_step %1,%2,12
+    bitonic_sort_step %1,%2,11
+    bitonic_sort_step %1,%2,10
+
 %endmacro
 
 %macro bitonic_sort_main 2
         ; %1: type of mm
         ; %2: how many simultaneously (1-2)
-        ; clobbers mm 1-2(2-5 if %2=2), 7-12
+        ; clobbers mm 2-3, 8-13
         ; in: mm0 (&mm1)
         ; out: mm0 (&mm1), sorted
-    nop
-    vmovdqa %1mm8, [counting]
-    vmovdqa %1mm9, [bitonic_swap + 0]
-    vmovdqa %1mm12, [bitonic_flip + 0]
 
-        ; xmm9-14: permutation that swaps the values
-        ; xmm8: list of indices
-        ; xmm7: permutation to broadcast higher index
+        ; xmm10-13: permutation that swaps the values
+        ; xmm9: list of indices
+        ; xmm8: permutation to broadcast higher index
         ; xmm0: the working vector
         ; xmm1: the swapped, then maxed values
         ; xmm2: the higher index value, xored into xmm0
-
-    bitonic_sort_step %1,%2,9
-    bitonic_sort_step %1,%2,12
-    vmovdqa %1mm12, [bitonic_flip + 32]
-    bitonic_sort_step %1,%2,9
-    vmovdqa %1mm10, [bitonic_swap + 32]
-    bitonic_sort_step %1,%2,12
-    vmovdqa %1mm12, [bitonic_flip + 64]
-    bitonic_sort_step %1,%2,10
-    vmovdqa %1mm11, [bitonic_swap + 64]
-    bitonic_sort_step %1,%2,9
-    bitonic_sort_step %1,%2,12
-    bitonic_sort_step %1,%2,11
-    bitonic_sort_step %1,%2,10
-    bitonic_sort_step %1,%2,9
+    bitonic_sort_load %1
+    bitonic_sort_loop %1,%2
 
 %endmacro
-
 
 
 fix_uint:
@@ -369,7 +364,7 @@ search_last_layer:
     xor r11, r11
 
     vpcmpeqq xmm5, xmm5, xmm5
-    vmovdqa ymm4, [last_layer_unpack_shifts]
+    vmovdqa ymm4, [batch_unpack_shifts]
 
 .loop:
         ; unpack the maps
@@ -432,3 +427,184 @@ search_last_layer:
 
     ret
 
+
+%macro check_validity 1
+    vpsrlq ymm2, ymm%1, 4
+    vpand ymm%1, ymm7
+    vpand ymm2, ymm7
+
+        ; xmm0: dest values
+        ; xmm2: current values
+    vpsrldq ymm3, ymm%1, 1
+    vpsrldq ymm4, ymm2, 1
+    vpsubb ymm%1, ymm3, ymm%1
+    vpsubb ymm2, ymm4, ymm2
+    vpslldq ymm%1, 1
+    vpslldq ymm2, 1
+
+    vpxor ymm4, ymm4
+    vpcmpeqq xmm5, xmm5
+        ; ymm4: zeroes, not sure another way around this
+        ; ymm5: low lane mask
+
+        ; xmm0,2: same as before but now deltas
+        ; check for illegal maps
+    xor r10, r10
+    xor r11, r11
+    vpcmpeqb ymm3, ymm2, ymm4
+    vpand ymm3, ymm%1
+    vptest ymm5, ymm3
+    setz r10b
+    setc r11b
+
+
+        ; check distance and store
+    vpabsb ymm%1, ymm%1
+    vpsubb ymm3, ymm2, ymm%1
+    vpmovmskb rdx, ymm3
+
+        ; we'll conditionally move the pointer along, but store the value each
+        ; time. there is probably a better way to do this, even just packing it
+        ; all into a single register first. but the gains are (probably) very
+        ; small there.
+
+        ; lower
+    xor r9, r9
+    xor rax, rax
+    mov [rdi], rcx
+    add rcx, 2
+    popcnt ax, dx
+    shr rdx, 16
+    cmp rax, r8
+    setle r9b
+    and r9, r10
+    lea rdi, [rdi + r9*2]
+
+        ; upper
+    xor r9, r9
+    mov [rdi], rcx
+    popcnt rax, rdx
+    cmp rax, r8
+    setle r9b
+    and r9, r11
+    lea rdi, [rdi + r9*2]
+%endmacro
+
+batch_apply_and_check:
+        ; rdi: start (uint64)
+        ; rsi: input maps (pointer)
+        ; rdx: output ids (pointer) (must be allocated and large enough)
+        ; rcx: quantity (int)
+        ; r8: threshhold (int)
+        ; r9: goal (uint64)
+        ;
+        ; returns: number of found valid cases
+
+    push r15
+    push r14
+    push r13
+    push r12
+    push rdx
+
+
+        ; similar start to last layer search
+    vmovq xmm0, rdi
+    vmovq xmm2, r9
+    mov rdi, rdx
+
+    ; shl rcx, 3
+    ; add rcx, rsi
+    mov r12, rcx
+    xor rcx,rcx
+
+        ; rdi: current output pointer
+        ; rcx: current index
+        ; r8: threshold
+        ; rsi: base input pointer
+        ; other registers okay to clobber
+
+        ; unpack the important maps
+        ; same as last layer
+    vmovdqa ymm7, [low_byte_mask]
+    vpslldq xmm1, xmm0, 8
+    vpslldq xmm3, xmm2, 8
+    vpsrlq xmm0, 4
+    vpsrlq xmm2, 4
+    vpor xmm0, xmm1
+    vpor xmm2, xmm3
+    vpand xmm0, xmm7
+    vpand xmm2, xmm7
+    vpermq ymm15, ymm0, 0x44
+    vpermq ymm14, ymm2, 0x44
+        ; ymm15: input
+        ; ymm14: goal
+        ; ymm7: low byte mask
+        ; ymm6: unpack shifts
+        ;
+        ; these barely won't be clobbered by bitonic sort, though it causes
+        ; bitonic sort to need to reload the flip perms each time
+
+    bitonic_sort_load y
+    vmovdqa ymm6, [batch_unpack_shifts]
+
+
+
+.loop:
+        ; unpack the maps
+        ; same as last layer
+    shl rcx, 3
+    vmovdqu ymm5, [rsi + rcx]
+    vpshufd ymm0, ymm5, 0x44
+    vpshufd ymm1, ymm5, 0xee
+    vpsrlvq ymm0, ymm6
+    vpsrlvq ymm1, ymm6
+    vpand ymm0, ymm7
+    vpand ymm1, ymm7
+    shr rcx, 3
+    
+        ; apply the maps
+        ; same as last layer
+    vpshufb ymm0, ymm0, ymm15
+    vpshufb ymm1, ymm1, ymm15
+
+        ; no need to extract the outputs, not storing those for now, just the ids
+    
+        ; prepare for sorting
+    vpsllq ymm0, 4
+    vpsllq ymm1, 4
+    vpor ymm0, ymm14
+    vpor ymm1, ymm14
+
+        ; sort (x4)
+    bitonic_sort_loop y,2
+
+        ; set up for validity test
+    ; xor r9, r9
+    xor r10, r10
+    xor r11, r11
+    ; vpxor ymm4, ymm4
+    vpcmpeqq xmm5, xmm5
+
+        ; check the validity
+    check_validity 0
+    dec rcx
+    check_validity 1
+    ; sub rcx, 7
+    inc rcx
+    cmp rcx, r12
+
+    jl .loop
+
+        ; finish off
+        ; all we need to do is get the return value made
+    mov rax, rdi
+    pop rdx
+    sub rax, rdx
+    shr rax, 1
+
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+
+    ret

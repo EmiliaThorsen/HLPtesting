@@ -184,32 +184,35 @@ long difLayerHits = 0;
 long misses = 0;
 long bucketUtil = 0;
 
-uint64_t *casheArr;
-uint8_t *casheDeapthArr;
-uint64_t casheMask;
 
+typedef struct cache_entry_s {
+    // uint64_t goal; // for future use?
+    uint64_t map;
+    uint8_t depth;
+    uint8_t round;
+} cache_entry_t;
 
-int casheCheck(uint64_t output, int deapth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & casheMask;
-    if(casheArr[pos] == output & casheDeapthArr[pos] <= deapth) {
-        if(casheDeapthArr[pos] == deapth) {
-            sameDeapthHits++;
-            return 1;
-        }
-        difLayerHits++;
+cache_entry_t *cacheArr;
+uint64_t cacheMask;
+
+int cacheCheck(uint64_t output, int deapth) {
+    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & cacheMask;
+    cache_entry_t* entry = cacheArr + pos;
+    if (entry->map == output && entry->round == currLayer) {
+        if (entry->depth == deapth) sameDeapthHits++;
+        else difLayerHits++;
         return 1;
     }
-    if(casheArr[pos] == 0) {
-        bucketUtil++;
-    } else {
-        misses++;
-    }
-    casheArr[pos] = output;
-    casheDeapthArr[pos] = deapth;
+
+    if (entry->round != currLayer) bucketUtil++;
+    else misses++;
+
+    entry->map = output;
+    entry->depth = deapth;
+    entry->round = currLayer;
+
     return 0;
 }
-
-int tmp = 0;
 
 //main dfs recursive search function
 int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
@@ -226,15 +229,12 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
             wanted
             );
     for(int i = 0; i < totalNextLayersIdentified; i++) {
-        /* int conf = i; */
         int conf = potentialLayers[i];
         uint64_t map = nextValidLayerLuts[prevLayerConf * 800 + conf];
         uint64_t output = apply_mapping(startPos, map);
-        /* uint64_t output = apply_and_check(startPos, map, currLayer - deapth - 1); */
-        /* if (output == 0) continue; */
 
-        //cashe check
-        if(casheCheck(output, deapth)) continue;
+        //cache check
+        if(cacheCheck(output, deapth)) continue;
 
         int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
@@ -255,11 +255,7 @@ void search() {
     printf("starting search!\n");
     uint_to_array(wanted, goal);
 
-    /* nextValidLayerLuts[799*800 + 415] = wanted; */
-    /* fastLastLayerSearch(startPos, 0); */
-
     while (1) {
-        for(int i = 0; i < casheMask + 1; i++) casheArr[i] = 0;
         if(dfs(startPos, 0, 799)) break;
         printf("search over layer: %d done!\n",currLayer);
         printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
@@ -282,10 +278,9 @@ int main() {
     startPos = fix_uint(startPos);
 
     //alocating the cache
-    int casheSize = 16;
-    casheArr = calloc((1 << casheSize), 8);
-    casheDeapthArr = calloc((1 << casheSize), 1);
-    casheMask = (1 << casheSize) - 1;
+    int cacheSize = 25;
+    cacheArr = calloc((1 << cacheSize), sizeof(cache_entry_t));
+    cacheMask = (1 << cacheSize) - 1;
 
     search();
 }

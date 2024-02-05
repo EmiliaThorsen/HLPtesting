@@ -19,15 +19,6 @@ extern void uint_to_array(uint64_t uint, uint8_t* array);
 extern uint64_t fix_uint(uint64_t uint);
 
 extern uint64_t layer(uint64_t map, uint16_t config);
-extern uint64_t apply_and_check(uint64_t input, uint64_t map, int threshhold);
-/* extern uint64_t check(uint64_t input, int threshhold); */
-
-
-extern void batch_apply(
-        uint64_t start,
-        uint64_t* output,
-        uint16_t* configurations,
-        int quantity);
 
 extern int batch_apply_and_check(
         uint64_t start,
@@ -43,36 +34,6 @@ extern int search_last_layer(
         uint64_t* maps,
         int quantity,
         uint64_t goal);
-
-
-const uint64_t broadcast8 = 0x0101010101010101;
-const uint64_t broadcast16 = broadcast8 | (broadcast8 << 4);
-const uint64_t barrier8 = broadcast8 * 0x80;
-const uint64_t low_halves64 = broadcast8 * 15;
-const uint64_t high_halves64 = low_halves64 << 4;
-
-uint64_t discount_simd_max_half(uint64_t a, uint64_t b) {
-    uint64_t mask = (((barrier8 + a - b) ^ barrier8) >> 4) & low_halves64;
-    return (~mask & a) | (mask & b);
-}
-
-uint64_t discount_simd_max(uint64_t a, uint64_t b) {
-    uint64_t low = discount_simd_max_half(a & low_halves64, b & low_halves64);
-    uint64_t high = discount_simd_max_half((a & high_halves64) >> 4, (b & high_halves64) >> 4);
-    return low | (high << 4);
-}
-
-uint64_t discount_simd_comparator_half(uint64_t back, uint64_t side, bool mode) {
-    uint64_t diff = barrier8 + back - side;
-    uint64_t cancel = ((diff ^ barrier8 ^ high_halves64) >> 4) & low_halves64;
-    return (mode ? diff : back) & cancel;
-}
-
-uint64_t discount_simd_comparator(uint64_t back, uint64_t side, bool mode) {
-    uint64_t low = discount_simd_comparator_half(back & low_halves64, side & low_halves64, mode);
-    uint64_t high = discount_simd_comparator_half((back & high_halves64) >> 4, (side & high_halves64) >> 4, mode);
-    return low | (high << 4);
-}
 
 uint64_t startPos = 0x0123456789ABCDEF; //DO NOT CHANGE
 
@@ -100,10 +61,6 @@ int getGroup(uint64_t x) {
         group++;
     }
     return group;
-}
-
-int cmpfunc (void * a, void * b) {
-   return ( *(uint64_t*)a - *(uint64_t*)b );
 }
 
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
@@ -152,16 +109,7 @@ void precomputeLayers(int group) {
 
 
 long iter = 0;
-
 int currLayer = 1;
-
-int mismatches = 0;
-
-//fast lut based layer, also does a check to see if the output is invalid and inposible to use to find goal
-uint64_t fastLayer(uint64_t input, uint64_t map, int threshhold) {
-    iter++;
-    return apply_and_check(input, map, threshhold);
-}
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
 int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
@@ -174,12 +122,12 @@ int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
     iter -= index;
 
     uint16_t config = layerConf[nextValidLayers[prevLayerConf * 800 + index]];
-    printf("deapth: %d configuration: %03hx\n", currLayer - 1, config);
+    printf("depth: %d configuration: %03hx\n", currLayer - 1, config);
     return 1;
 }
 
 //cache related code, used for removing identical or worse solutions
-long sameDeapthHits = 0;
+long sameDepthHits = 0;
 long difLayerHits = 0;
 long misses = 0;
 long bucketUtil = 0;
@@ -195,11 +143,11 @@ typedef struct cache_entry_s {
 cache_entry_t *cacheArr;
 uint64_t cacheMask;
 
-int cacheCheck(uint64_t output, int deapth) {
+int cacheCheck(uint64_t output, int depth) {
     uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & cacheMask;
     cache_entry_t* entry = cacheArr + pos;
     if (entry->map == output && entry->round == currLayer) {
-        if (entry->depth == deapth) sameDeapthHits++;
+        if (entry->depth == depth) sameDepthHits++;
         else difLayerHits++;
         return 1;
     }
@@ -208,15 +156,15 @@ int cacheCheck(uint64_t output, int deapth) {
     else misses++;
 
     entry->map = output;
-    entry->depth = deapth;
+    entry->depth = depth;
     entry->round = currLayer;
 
     return 0;
 }
 
 //main dfs recursive search function
-int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
-    if(deapth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
+int dfs(uint64_t startPos, int depth, int prevLayerConf) {
+    if(depth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
     uint16_t potentialLayers[800];
     iter += nextValidLayersSize[prevLayerConf];
@@ -225,7 +173,7 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
             nextValidLayerLuts + prevLayerConf*800,
             potentialLayers,
             nextValidLayersSize[prevLayerConf],
-            currLayer - deapth - 1,
+            currLayer - depth - 1,
             wanted
             );
     for(int i = 0; i < totalNextLayersIdentified; i++) {
@@ -234,15 +182,15 @@ int dfs(uint64_t startPos, int deapth, int prevLayerConf) {
         uint64_t output = apply_mapping(startPos, map);
 
         //cache check
-        if(cacheCheck(output, deapth)) continue;
+        if(cacheCheck(output, depth)) continue;
 
         int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
-        if(dfs(output, deapth + 1, index)) {
-            printf("deapth: %d configuration: %03hx\n", deapth, layerConf[index]);
+        if(dfs(output, depth + 1, index)) {
+            printf("depth: %d configuration: %03hx\n", depth, layerConf[index]);
             return 1;
         }
-        if(deapth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
+        if(depth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
     }
     return 0;
 }
@@ -260,8 +208,8 @@ void search() {
         printf("search over layer: %d done!\n",currLayer);
         printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
         printf("iterations: %ld\n", iter);
-        printf("same deapth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDeapthHits, difLayerHits, misses, bucketUtil);
-        sameDeapthHits = 0;
+        printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil);
+        sameDepthHits = 0;
         difLayerHits = 0;
         misses = 0;
         bucketUtil = 0;

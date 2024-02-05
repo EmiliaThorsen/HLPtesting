@@ -2,19 +2,13 @@ default rel
 BITS 64
 %use altreg
 
-global apply_and_check; input, configuration, threshold
-; global bitonic_sort16x8; pointer to byte array
-; global pretty_uint_to_array; uint, array
 global array_to_uint, uint_to_array
 global fix_uint
-global apply_mapping, store_mapping
-; global layer_inner_cc, layer_inner_cs, layer_inner_ss, layer_inner_sc, layer_inner_rot_sc
-        ; global getGroup ; i could and it'd be really fast but it's not really necessary at all
+global apply_mapping
 global layer
 global search_last_layer
 global batch_apply_and_check
 
-extern goal
 
 section .data
 
@@ -22,8 +16,6 @@ align 32
 low_byte_mask: times 32 db 15
 barrel_unpack_shifts: dq 4,4,0,0
 batch_unpack_shifts: dq 4,0,4,0
-; mode_unpack_shifts: dq 31,31,0,0
-
 bitonic_2swap: times 2 db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
 
 
@@ -224,18 +216,6 @@ array_to_uint:
     ret
 
 
-store_mapping:
-    vmovq xmm0, rdi
-    vmovdqa xmm2, [low_byte_mask]
-    vpslldq xmm1, xmm0, 8
-    vpsrlq xmm0, 4
-    vpor xmm0, xmm1
-    vpand xmm0, xmm2
-
-    vmovdqu [rsi], xmm0
-
-    ret
-
 %macro apply_map_basic 0
         ;vpermq?
     vmovq xmm0, rdi
@@ -263,58 +243,6 @@ apply_mapping:
     apply_map_basic
     ret
 
-
-apply_and_check:
-        ; rdi: input
-        ; rsi: map
-        ; rdx: threshold
-
-    apply_map_basic
-
-    ; call apply_mapping
-
-        ; prepare for sorting
-    vpsllq xmm0, 4
-    vpor xmm0, [goal]
-
-    bitonic_sort_main x,1
-
-    vmovdqa xmm4, [low_byte_mask]
-
-    vpsrlq xmm1, xmm0, 4
-    vpand xmm0, xmm4
-    vpand xmm1, xmm4
-
-        ; xmm0: dest values
-        ; xmm1: current values
-    vpsrldq xmm2, xmm0, 1
-    vpsrldq xmm3, xmm1, 1
-    vpsubb xmm0, xmm2, xmm0
-    vpsubb xmm1, xmm3, xmm1
-    vpslldq xmm0, 1
-    vpslldq xmm1, 1
-
-
-        ; xmm0-1: same as before but now deltas
-    vpxor xmm5, xmm5
-    xor rcx, rcx
-    vpcmpeqb xmm2, xmm1, xmm5
-    vptest xmm2, xmm0
-    setz cl
-    neg rcx
-    and rax, rcx
-
-    xor rcx, rcx
-    vpabsb xmm0, xmm0
-    vpsubb xmm3, xmm1, xmm0
-    vpmovmskb rdi, xmm3
-    popcnt rdi, rdi
-    cmp rdi, rdx
-    setng cl
-    neg rcx
-    and rax, rcx
-
-    ret
 
 bitonic_sort16x8:
     vmovdqa xmm0, [rdi]

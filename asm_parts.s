@@ -24,17 +24,7 @@ barrel_unpack_shifts: dq 4,4,0,0
 batch_unpack_shifts: dq 4,0,4,0
 ; mode_unpack_shifts: dq 31,31,0,0
 
-bitonic_swap:
-times 2 db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
-times 2 db 2,3,0,1,6,7,4,5,10,11,8,9,14,15,12,13
-times 2 db 4,5,6,7,0,1,2,3,12,13,14,15,8,9,10,11
-
-bitonic_flip:
-times 2 db 3,2,1,0,7,6,5,4,11,10,9,8,15,14,13,12
-times 2 db 7,6,5,4,3,2,1,0,15,14,13,12,11,10,9,8
-times 2 db 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
-
-counting: times 2 db 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+bitonic_2swap: times 2 db 1,0,3,2,5,4,7,6,9,8,11,10,13,12,15,14
 
 
         ; align 16
@@ -142,20 +132,24 @@ layer:
 
 %macro bitonic_sort_load 1
     nop
-    vmovdqa %1mm9, [counting]
-    vmovdqa %1mm10, [bitonic_swap + 0]
-    vmovdqa %1mm11, [bitonic_swap + 32]
-    vmovdqa %1mm12, [bitonic_swap + 64]
+    vmovdqa %1mm10, [bitonic_2swap]
+    vpshufb %1mm9, %1mm10, %1mm10
+    vpshuflw %1mm11, %1mm9, 10110001b
+    vpshufhw %1mm11, %1mm11, 10110001b
+    vpshufd %1mm12, %1mm9, 10110001b
 %endmacro
 
 %macro bitonic_sort_loop 2
-    vmovdqa %1mm13, [bitonic_flip + 0]
+        ; we make clever use of shuf's to avoid loading as many vectors from
+        ; memory, and instead get them from already loaded things. this doesn't
+        ; take more instructions either
+    vpshufb %1mm13, %1mm11, %1mm10
     bitonic_sort_step %1,%2,10
     bitonic_sort_step %1,%2,13
-    vmovdqa %1mm13, [bitonic_flip + 32]
+    vpshufd %1mm13, %1mm13, 10110001b
     bitonic_sort_step %1,%2,10
     bitonic_sort_step %1,%2,13
-    vmovdqa %1mm13, [bitonic_flip + 64]
+    vpshufd %1mm13, %1mm13, 01001110b
     bitonic_sort_step %1,%2,11
     bitonic_sort_step %1,%2,10
     bitonic_sort_step %1,%2,13
@@ -541,8 +535,7 @@ batch_apply_and_check:
         ; ymm7: low byte mask
         ; ymm6: unpack shifts
         ;
-        ; these barely won't be clobbered by bitonic sort, though it causes
-        ; bitonic sort to need to reload the flip perms each time
+        ; these barely won't be clobbered by bitonic sort
 
     bitonic_sort_load y
     vmovdqa ymm6, [batch_unpack_shifts]

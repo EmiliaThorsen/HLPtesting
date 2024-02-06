@@ -10,6 +10,9 @@ global search_last_layer
 global batch_apply_and_check
 
 
+extern wanted, cacheArr, cacheMask, currLayer
+
+
 section .data
 
 align 32
@@ -392,9 +395,9 @@ search_last_layer:
     mov rdx, rax
     shr rax, 32
     crc32 rax, rdx
+    and rax, r14
     shl rax, 4
-    add rax, r13
-    prefetchnta [rax]
+    prefetchnta [r13 + rax]
 
     vpmovmskb rdx, ymm3
 
@@ -434,9 +437,9 @@ search_last_layer:
     mov rdx, rax
     shr rax, 32
     crc32 rax, rdx
+    and rax, r14
     shl rax, 4
-    add rax, r13
-    prefetchnta [rax]
+    prefetchnta [r13 + rax]
 %endmacro
 
 batch_apply_and_check:
@@ -445,8 +448,6 @@ batch_apply_and_check:
         ; rdx: output ids (pointer) (must be allocated and large enough)
         ; rcx: quantity (int)
         ; r8: threshhold (int)
-        ; r9: goal (uint64)
-        ; [rsp+8]: cache array pointer
         ;
         ; returns: number of found valid cases
 
@@ -455,22 +456,24 @@ batch_apply_and_check:
     push r13
     push r12
     push rdx
-    mov r13, [rsp + 8*6]
 
         ; similar start to last layer search
     vmovq xmm0, rdi
-    vmovq xmm2, r9
-    mov rdi, rdx
+    vmovq xmm2, [wanted]
+    mov r13, [cacheArr]
+    mov r14, [cacheMask]
 
-    ; shl rcx, 3
-    ; add rcx, rsi
     mov r12, rcx
-    xor rcx,rcx
+    xor rcx, rcx
+    mov rdi, rdx
 
         ; rdi: current output pointer
         ; rcx: current index
         ; r8: threshold
         ; rsi: base input pointer
+        ; r12: stopping point for loop
+        ; r13: cache pointer
+        ; r14: cache mask
         ; other registers okay to clobber
 
         ; unpack the important maps
@@ -501,15 +504,13 @@ batch_apply_and_check:
 .main_loop:
         ; unpack the maps
         ; same as last layer
-    shl rcx, 3
-    vmovdqu ymm5, [rsi + rcx]
+    vmovdqu ymm5, [rsi + rcx*8]
     vpshufd ymm0, ymm5, 0x44
     vpshufd ymm1, ymm5, 0xee
     vpsrlvq ymm0, ymm6
     vpsrlvq ymm1, ymm6
     vpand ymm0, ymm7
     vpand ymm1, ymm7
-    shr rcx, 3
     
         ; apply the maps
         ; same as last layer
@@ -554,13 +555,64 @@ batch_apply_and_check:
 
     jl .main_loop
 
+
+        ; done searching, now check the cache, that we prefetched into cache
+    pop rsi
+    sub rdi, rsi
+    xor rcx, rcx
+        ; rdi: count found * 16
+        ; rsi: output array
+        ; r8: amount that have passed the cache check
+
+    xor r8, r8
+    xor r9, r9
+    xor rax, rax
+    test rdi, rdi
+    jz .end
+
+    vmovq xmm2, [currLayer]
+    vpxor xmm4, xmm4
+
+.cache_loop:
+        ; prepare for checking if match, and move item
+    vmovdqu xmm0, [rsi + rcx]
+    vpblendw xmm1, xmm2, xmm0, 0xf
+    vmovdqu [rsi + r8], xmm0
+
+        ; find the cache entry
+    mov rax, [rsi + rcx + 8]
+    mov rdx, rax
+    shr rax, 32
+    crc32 rax, rdx
+    and rax, r14
+    shl rax, 4
+
+        ; retrieve the entry and set it as well
+    vmovdqu xmm3, [r13 + rax]
+    vmovdqu [r13 + rax], xmm0
+
+        ; check if it's a match
+    vpxor xmm3, xmm0
+    vptest xmm3, xmm4
+
+        ; if not a match, inc the index
+    setz r9b
+    shl r9, 4
+    add r8, r9
+
+        ; loop
+    add rcx, 16
+    cmp rcx, rdi
+
+    jl .cache_loop
+
         ; finish off
         ; all we need to do is get the return value made
-    mov rax, rdi
-    pop rdx
-    sub rax, rdx
+    mov rax, r8
     shr rax, 4
 
+
+.end:
     pop r12
     pop r13
     pop r14

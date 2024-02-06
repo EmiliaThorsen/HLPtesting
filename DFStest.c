@@ -26,7 +26,8 @@ extern int batch_apply_and_check(
         uint64_t* output_ids_and_maps,
         int quantity,
         int threshhold,
-        uint64_t goal
+        uint64_t goal,
+        void* cache
         );
 
 extern int search_last_layer(
@@ -115,7 +116,7 @@ int currLayer = 1;
 int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
 
     int search_size = nextValidLayersSize[prevLayerConf];
-    iter += search_size;
+    /* iter += search_size; */
     int index = search_last_layer(input, nextValidLayerLuts + 800*prevLayerConf, search_size, wanted);
     if (index == -1) return 0;
 
@@ -136,15 +137,15 @@ long bucketUtil = 0;
 typedef struct cache_entry_s {
     // uint64_t goal; // for future use?
     uint64_t map;
-    uint8_t depth;
-    uint8_t round;
+    uint32_t depth;
+    uint32_t round;
 } cache_entry_t;
 
 cache_entry_t *cacheArr;
 uint64_t cacheMask;
 
 int cacheCheck(uint64_t output, int depth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & 0xFFFFFFFF), (output >> 32) & 0xFFFFFFFF) & cacheMask;
+    uint32_t pos = _mm_crc32_u32(output & 0xFFFFFFFF, (output >> 32) & 0xFFFFFFFF) & cacheMask;
     cache_entry_t* entry = cacheArr + pos;
     if (entry->map == output && entry->round == currLayer) {
         if (entry->depth == depth) sameDepthHits++;
@@ -176,7 +177,8 @@ int dfs(uint64_t startPos, int depth, int prevLayerConf) {
             potentialLayers,
             nextValidLayersSize[prevLayerConf],
             currLayer - depth - 1,
-            wanted
+            wanted,
+            cacheArr
             );
     for(int i = 0; i < totalNextLayersIdentified*2; i+=2) {
         uint64_t output = potentialLayers[i + 1];// ;

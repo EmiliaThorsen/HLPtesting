@@ -380,7 +380,6 @@ search_last_layer:
         ; check distance and store
     vpabsb ymm%1, ymm%1
     vpsubb ymm3, ymm2, ymm%1
-    vpmovmskb rdx, ymm3
 
         ; we'll conditionally move the pointer along, but store the value each
         ; time. there is probably a better way to do this, even just packing it
@@ -388,16 +387,30 @@ search_last_layer:
         ; small there.
 
         ; lower
+        ; prefetch cache
+    vmovq rax, xmm5
+    mov rdx, rax
+    shr rax, 32
+    crc32 rax, rdx
+    shl rax, 4
+    add rax, r13
+    prefetchnta [rax]
+
+    vpmovmskb rdx, ymm3
+
     xor r9, r9
-    xor rax, rax
     mov [rdi], rcx
     vmovq [rdi+8], xmm5
     vpermq ymm5, ymm5, 01001110b
     add rcx, 2
 
+        ; check distance
+    xor rax, rax
     popcnt ax, dx
     shr rdx, 16
     cmp rax, r8
+
+        ; conditional advance
     setle r9b
     and r9, r10
     shl r9, 4
@@ -408,12 +421,22 @@ search_last_layer:
     mov [rdi], rcx
     vmovq [rdi+8], xmm5
 
+        ; dist and advance
     popcnt rax, rdx
     cmp rax, r8
     setle r9b
     and r9, r11
     shl r9, 4
     add rdi, r9
+
+        ; prefetch
+    vmovq rax, xmm5
+    mov rdx, rax
+    shr rax, 32
+    crc32 rax, rdx
+    shl rax, 4
+    add rax, r13
+    prefetchnta [rax]
 %endmacro
 
 batch_apply_and_check:
@@ -423,6 +446,7 @@ batch_apply_and_check:
         ; rcx: quantity (int)
         ; r8: threshhold (int)
         ; r9: goal (uint64)
+        ; [rsp+8]: cache array pointer
         ;
         ; returns: number of found valid cases
 
@@ -431,7 +455,7 @@ batch_apply_and_check:
     push r13
     push r12
     push rdx
-
+    mov r13, [rsp + 8*6]
 
         ; similar start to last layer search
     vmovq xmm0, rdi
@@ -474,7 +498,7 @@ batch_apply_and_check:
 
 
 
-.loop:
+.main_loop:
         ; unpack the maps
         ; same as last layer
     shl rcx, 3
@@ -528,7 +552,7 @@ batch_apply_and_check:
     inc rcx
     cmp rcx, r12
 
-    jl .loop
+    jl .main_loop
 
         ; finish off
         ; all we need to do is get the return value made

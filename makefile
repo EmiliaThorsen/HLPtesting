@@ -15,7 +15,7 @@ aa_tree.o: aa_tree.c makefile
 	gcc -o aa_tree.o aa_tree.c -O3 -march=native -c $(FLAGS)
 
 DFStest.o: DFStest.c makefile aa_tree.h
-	gcc -o DFStest.o DFStest.c -O0 -march=native -c $(FLAGS)
+	gcc -o DFStest.o DFStest.c -O3 -march=native -c $(FLAGS)
 
 asm_parts.o: asm_parts.s makefile
 	nasm -o asm_parts.o asm_parts.s -felf64 $(FLAGS)

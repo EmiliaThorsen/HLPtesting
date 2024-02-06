@@ -365,17 +365,14 @@ search_last_layer:
     vpslldq ymm2, 1
 
     vpxor ymm4, ymm4
-    vpcmpeqq xmm5, xmm5
-        ; ymm4: zeroes, not sure another way around this
-        ; ymm5: low lane mask
-
         ; xmm0,2: same as before but now deltas
         ; check for illegal maps
     xor r10, r10
     xor r11, r11
     vpcmpeqb ymm3, ymm2, ymm4
+    vpcmpeqq xmm4, xmm4
     vpand ymm3, ymm%1
-    vptest ymm5, ymm3
+    vptest ymm4, ymm3
     setz r10b
     setc r11b
 
@@ -394,22 +391,29 @@ search_last_layer:
     xor r9, r9
     xor rax, rax
     mov [rdi], rcx
+    vmovq [rdi+8], xmm5
+    vpermq ymm5, ymm5, 01001110b
     add rcx, 2
+
     popcnt ax, dx
     shr rdx, 16
     cmp rax, r8
     setle r9b
     and r9, r10
-    lea rdi, [rdi + r9*2]
+    shl r9, 4
+    add rdi, r9
 
         ; upper
     xor r9, r9
     mov [rdi], rcx
+    vmovq [rdi+8], xmm5
+
     popcnt rax, rdx
     cmp rax, r8
     setle r9b
     and r9, r11
-    lea rdi, [rdi + r9*2]
+    shl r9, 4
+    add rdi, r9
 %endmacro
 
 batch_apply_and_check:
@@ -488,7 +492,18 @@ batch_apply_and_check:
     vpshufb ymm0, ymm0, ymm15
     vpshufb ymm1, ymm1, ymm15
 
-        ; no need to extract the outputs, not storing those for now, just the ids
+        ; pack them up for storing later
+    vpsrldq ymm2, ymm0, 8
+    vpsllq ymm3, ymm0, 4
+    vpor ymm5, ymm2, ymm3
+
+    vpsrldq ymm2, ymm1, 8
+    vpsllq ymm3, ymm1, 4
+    vpor ymm2, ymm3
+    vpslldq ymm2, 8
+
+    vpblendw ymm5, ymm2, 0xf0
+
     
         ; prepare for sorting
     vpsllq ymm0, 4
@@ -503,11 +518,10 @@ batch_apply_and_check:
     ; xor r9, r9
     xor r10, r10
     xor r11, r11
-    ; vpxor ymm4, ymm4
-    vpcmpeqq xmm5, xmm5
 
         ; check the validity
     check_validity 0
+    vpermq ymm5, ymm5, 00011011b
     dec rcx
     check_validity 1
     ; sub rcx, 7
@@ -521,7 +535,7 @@ batch_apply_and_check:
     mov rax, rdi
     pop rdx
     sub rax, rdx
-    shr rax, 1
+    shr rax, 4
 
     pop r12
     pop r13

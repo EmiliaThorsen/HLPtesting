@@ -23,7 +23,7 @@ extern uint64_t layer(uint64_t map, uint16_t config);
 extern int batch_apply_and_check(
         uint64_t start,
         uint64_t* input_maps,
-        uint16_t* output_ids,
+        uint64_t* output_ids_and_maps,
         int quantity,
         int threshhold,
         uint64_t goal
@@ -162,11 +162,13 @@ int cacheCheck(uint64_t output, int depth) {
     return 0;
 }
 
+int tmp=0;
+
 //main dfs recursive search function
 int dfs(uint64_t startPos, int depth, int prevLayerConf) {
     if(depth == currLayer - 1) return fastLastLayerSearch(startPos, prevLayerConf);
     int dedupeArrSize = 0;
-    uint16_t potentialLayers[800];
+    uint64_t potentialLayers[1600];
     iter += nextValidLayersSize[prevLayerConf];
     int totalNextLayersIdentified = batch_apply_and_check(
             startPos,
@@ -176,13 +178,14 @@ int dfs(uint64_t startPos, int depth, int prevLayerConf) {
             currLayer - depth - 1,
             wanted
             );
-    for(int i = 0; i < totalNextLayersIdentified; i++) {
-        int conf = potentialLayers[i];
-        uint64_t map = nextValidLayerLuts[prevLayerConf * 800 + conf];
-        uint64_t output = apply_mapping(startPos, map);
+    for(int i = 0; i < totalNextLayersIdentified*2; i+=2) {
+        uint64_t output = potentialLayers[i + 1];// ;
 
         //cache check
         if(cacheCheck(output, depth)) continue;
+
+        int conf = potentialLayers[i];
+
 
         int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
@@ -196,7 +199,8 @@ int dfs(uint64_t startPos, int depth, int prevLayerConf) {
 }
 
 //main search loop
-void search() {
+void search(uint64_t m) {
+    wanted = fix_uint(m);
     clock_t programStartT = clock();
     precomputeLayers(getGroup(wanted));
     printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
@@ -218,11 +222,11 @@ void search() {
         if(currLayer > 42) break;
     }
     printf("total iter over all: %ld\n", iter);
+        printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil);
 }
 
-int main() {
+int main(int argv, char** argc) {
 
-    wanted = fix_uint(wanted);
     startPos = fix_uint(startPos);
 
     //alocating the cache
@@ -230,5 +234,5 @@ int main() {
     cacheArr = calloc((1 << cacheSize), sizeof(cache_entry_t));
     cacheMask = (1 << cacheSize) - 1;
 
-    search();
+    search(wanted);
 }

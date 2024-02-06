@@ -25,7 +25,9 @@ extern int batch_apply_and_check(
         uint64_t* input_maps,
         uint64_t* output_ids_and_maps,
         int quantity,
-        int threshhold
+        int threshhold,
+        uint64_t goal,
+        void* cache
         );
 
 extern int search_last_layer(
@@ -139,7 +141,7 @@ typedef struct cache_entry_s {
     uint32_t round;
 } cache_entry_t;
 
-void *cacheArr;
+cache_entry_t *cacheArr;
 uint64_t cacheMask;
 
 int cacheCheck(uint64_t output, int depth) {
@@ -174,13 +176,15 @@ int dfs(uint64_t startPos, int depth, int prevLayerConf) {
             nextValidLayerLuts + prevLayerConf*800,
             potentialLayers,
             nextValidLayersSize[prevLayerConf],
-            currLayer - depth - 1
+            currLayer - depth - 1,
+            wanted,
+            cacheArr
             );
     for(int i = 0; i < totalNextLayersIdentified*2; i+=2) {
         uint64_t output = potentialLayers[i + 1];// ;
 
         //cache check
-        /* if(cacheCheck(output, depth)) continue; */
+        if(cacheCheck(output, depth)) continue;
 
         int conf = potentialLayers[i];
 
@@ -210,7 +214,7 @@ void search(uint64_t m) {
         printf("search over layer: %d done!\n",currLayer);
         printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC);
         printf("iterations: %ld\n", iter);
-        /* printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil); */
+        printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil);
         sameDepthHits = 0;
         difLayerHits = 0;
         misses = 0;
@@ -220,7 +224,7 @@ void search(uint64_t m) {
         if(currLayer > 42) break;
     }
     printf("total iter over all: %ld\n", iter);
-        /* printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil); */
+        printf("same depth hits:%ld dif layer hits:%ld misses: %ld bucket utilization: %ld\n", sameDepthHits, difLayerHits, misses, bucketUtil);
 }
 
 int main(int argv, char** argc) {
@@ -229,7 +233,7 @@ int main(int argv, char** argc) {
 
     //alocating the cache
     int cacheSize = 25;
-    cacheArr = calloc((1 << cacheSize), 16);
+    cacheArr = calloc((1 << cacheSize), sizeof(cache_entry_t));
     cacheMask = (1 << cacheSize) - 1;
 
     search(wanted);

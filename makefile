@@ -14,6 +14,9 @@ a.out: DFStest.o asm_parts.o aa_tree.o makefile
 aa_tree.o: aa_tree.c makefile
 	gcc -o aa_tree.o aa_tree.c -O3 -march=native -c $(FLAGS)
 
+# do NOT set to even -O1, at least until the bugs have been resolved.
+# for some reason, the optimization breaks something that has yet to be
+# determined
 DFStest.o: DFStest.c makefile aa_tree.h
 	gcc -o DFStest.o DFStest.c -O0 -march=native -c $(FLAGS)
 

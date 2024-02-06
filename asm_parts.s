@@ -5,10 +5,13 @@ BITS 64
 global array_to_uint, uint_to_array
 global fix_uint
 global apply_mapping
+global apply_and_check
 global layer
 global search_last_layer
 global batch_apply_and_check
 
+extern wanted
+extern goal
 
 section .data
 
@@ -349,6 +352,58 @@ search_last_layer:
 
     ret
 
+apply_and_check:
+        ; rdi: input
+        ; rsi: map
+        ; rdx: threshold
+
+    apply_map_basic
+
+    ; call apply_mapping
+
+        ; prepare for sorting
+    vpsllq xmm0, 4
+    vpor xmm0, [goal]
+
+    bitonic_sort_main x,1
+
+    vmovdqa xmm4, [low_byte_mask]
+
+    vpsrlq xmm1, xmm0, 4
+    vpand xmm0, xmm4
+    vpand xmm1, xmm4
+
+        ; xmm0: dest values
+        ; xmm1: current values
+    vpsrldq xmm2, xmm0, 1
+    vpsrldq xmm3, xmm1, 1
+    vpsubb xmm0, xmm2, xmm0
+    vpsubb xmm1, xmm3, xmm1
+    vpslldq xmm0, 1
+    vpslldq xmm1, 1
+
+
+        ; xmm0-1: same as before but now deltas
+    vpxor xmm5, xmm5
+    xor rcx, rcx
+    vpcmpeqb xmm2, xmm1, xmm5
+    vptest xmm2, xmm0
+    setz cl
+    neg rcx
+    and rax, rcx
+
+    xor rcx, rcx
+    vpabsb xmm0, xmm0
+    vpsubb xmm3, xmm1, xmm0
+    vpmovmskb rdi, xmm3
+    popcnt rdi, rdi
+    cmp rdi, rdx
+    setng cl
+    neg rcx
+    and rax, rcx
+
+    ret
+
 
 %macro check_validity 1
     vpsrlq ymm2, ymm%1, 4
@@ -422,7 +477,6 @@ batch_apply_and_check:
         ; rdx: output ids (pointer) (must be allocated and large enough)
         ; rcx: quantity (int)
         ; r8: threshhold (int)
-        ; r9: goal (uint64)
         ;
         ; returns: number of found valid cases
 
@@ -435,7 +489,7 @@ batch_apply_and_check:
 
         ; similar start to last layer search
     vmovq xmm0, rdi
-    vmovq xmm2, r9
+    vmovq xmm2, [wanted]
     mov rdi, rdx
 
     ; shl rcx, 3

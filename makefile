@@ -3,9 +3,9 @@
 
 TARGET = main
 
-# DEBUG = yes
-# WERROR = yes
-# WALL = yes
+# DEBUG = pona
+# WERROR = tawa
+WALL = tonsi
 
 SRC_DIR := src
 BUILD_DIR := build
@@ -27,7 +27,7 @@ INC_DIRS := $(shell find $(SRC_DIR) -type d)
 C_INC_FLAGS := $(addprefix -I, $(INC_DIRS))
 AS_INC_FLAGS := $(addprefix -i, $(INC_DIRS))
 
-CCFLAGS += -march=native $(C_INC_FLAGS) -MMD -MP -O0
+CCFLAGS += -march=native $(C_INC_FLAGS) -MMD -MP -O4
 CXXFLAGS += -march=native $(C_INC_FLAGS) -MMD -MP -O4
 ASFLAGS += -felf64 $(AS_INC_FLAGS) -MD -MP
 LDFLAGS += -z noexecstack

@@ -3,7 +3,7 @@
 
 TARGET = main
 
-# DEBUG = pona
+DEBUG = pona
 # WERROR = tawa
 WALL = tonsi
 

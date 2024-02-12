@@ -13,6 +13,15 @@ global batch_apply_and_check
 extern wanted
 extern goal
 
+
+struc branch_layer
+.map resq 1
+.configIndex resw 1
+.separations resb 1
+resb 5
+endstruc
+
+
 section .data
 
 align 32
@@ -445,12 +454,13 @@ apply_and_check:
         ; lower
     xor r9, r9
     xor rax, rax
-    mov [rdi], rcx
-    vmovq [rdi+8], xmm5
+    mov [rdi + branch_layer.configIndex], rcx
+    vmovq [rdi + branch_layer.map], xmm5
     vpermq ymm5, ymm5, 01001110b
     add rcx, 2
 
     popcnt ax, dx
+    mov [rdi + branch_layer.separations], al
     shr rdx, 16
     cmp rax, r8
     setle r9b
@@ -460,10 +470,11 @@ apply_and_check:
 
         ; upper
     xor r9, r9
-    mov [rdi], rcx
-    vmovq [rdi+8], xmm5
+    mov [rdi + branch_layer.configIndex], rcx
+    vmovq [rdi + branch_layer.map], xmm5
 
     popcnt rax, rdx
+    mov [rdi + branch_layer.separations], al
     cmp rax, r8
     setle r9b
     and r9, r11

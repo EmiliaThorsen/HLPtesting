@@ -2,13 +2,15 @@
 #define HLP_SOLVE
 #include <stdint.h>
 
-enum SearchAccuracy { ACCURACY_REDUCED, ACCURACY_NORMAL, ACCURACY_INCREASED, ACCURACY_PERFECT };
+enum SearchAccuracy { ACCURACY_REDUCED=-1, ACCURACY_NORMAL, ACCURACY_INCREASED, ACCURACY_PERFECT };
 
 
 // the start position, or at least the pretty one that can be used outside the solver
 extern const uint64_t hlpStartPos;
 
 extern const uint64_t broadcastH16; // 0x1111...
+
+extern int hlpSolveVerbosity;
 
 /* apply a layer to the map
  * config: 00000mmmaaaabbbb
@@ -22,7 +24,13 @@ extern uint64_t layer(uint64_t map, uint16_t config);
 /* search for a solution for the given map
  * returns length of chain
  */
-int solve(uint64_t m, uint16_t* outputChain, enum SearchAccuracy accuracy);
+int solve(char* map, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy);
+
+
+/* same as solve, but takes a uint64 as input
+ */
+int solveN(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy);
+
 
 /* safely set the cache size (changes will apply on next search)
  * cache will have 2 ** size entries, with 16 byte entries

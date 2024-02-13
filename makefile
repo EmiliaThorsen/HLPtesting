@@ -1,9 +1,9 @@
 
 # Much of this was taken from makefiletutorial.com
 
-TARGET = main
+TARGET = hlpsolve
 
-DEBUG = pona
+# DEBUG = pona
 # WERROR = tawa
 WALL = tonsi
 

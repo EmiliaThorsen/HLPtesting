@@ -58,6 +58,7 @@ uint16_t* layerConf;
 uint16_t* nextValidLayers;
 uint64_t* nextValidLayerLuts;
 int* nextValidLayersSize;
+int hlpSolveVerbosity = 1;
 
 
 uint16_t* layerConfAll[16] = {0};
@@ -99,10 +100,10 @@ bool inList(uint64_t item, uint64_t* list, int maxIndex) {
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
 void precomputeLayers(int group) {
     if ((layerPrecomputesFinished << (group - 1)) & 1) {
-        layerConf = layerConfAll[group];
-        nextValidLayers = nextValidLayersAll[group];
-        nextValidLayerLuts = nextValidLayerLutsAll[group];
-        nextValidLayersSize = nextValidLayersSizeAll[group];
+        layerConf = layerConfAll[group-1];
+        nextValidLayers = nextValidLayersAll[group-1];
+        nextValidLayerLuts = nextValidLayerLutsAll[group-1];
+        nextValidLayersSize = nextValidLayersSizeAll[group-1];
         return;
     }
 
@@ -246,7 +247,7 @@ int cmpfunc (const void * a, const void * b) {
 
 // the most number of separations that can be found in the distance check before it prunes
 int getDistThreshold(int remainingLayers) {
-    if (_searchAccuracy == ACCURACY_REDUCED) return remainingLayers - 1;
+    if (_searchAccuracy == ACCURACY_REDUCED) return remainingLayers - (remainingLayers > 2);
     // n is always sufficient anyways for 15-16 outputs
     if (_searchAccuracy == ACCURACY_NORMAL || _uniqueOutputs > 14) return remainingLayers;
     // n+1 is always sufficient for 14 outputs
@@ -353,7 +354,8 @@ int singleSearch(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAcc
     return singleSearchInner(maxDepth);
 }
 
-int solve(uint64_t m, uint16_t* outputChain, enum SearchAccuracy accuracy) {
+int solveN(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
+    if (maxDepth < 0 || maxDepth > 31) maxDepth = 31;
     if (m == 0) {
         if (outputChain) outputChain[0] = 0x2f0;
         return 1;
@@ -364,7 +366,7 @@ int solve(uint64_t m, uint16_t* outputChain, enum SearchAccuracy accuracy) {
 
     _outputChain = outputChain;
     _solutionsFound = -1;
-    int solutionLength = 31;
+    int solutionLength = maxDepth;
 
     // reduced accuracy search is sometimes faster than the others but
     // still often gets an optimal solution, so we start with that so the
@@ -373,11 +375,15 @@ int solve(uint64_t m, uint16_t* outputChain, enum SearchAccuracy accuracy) {
     _searchAccuracy = ACCURACY_REDUCED;
     solutionLength = singleSearchInner(solutionLength);
 
-    if (solutionLength == 31) solutionLength = 31;
+    if (solutionLength == maxDepth) solutionLength = maxDepth;
     if (accuracy == ACCURACY_REDUCED) return solutionLength;
 
     _searchAccuracy = accuracy;
     return singleSearchInner(solutionLength - 1);
+}
+
+int solve(char* map, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
+    return solveN(strtoull(map, 0, 16), outputChain, maxDepth, accuracy);
 }
 
 

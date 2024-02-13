@@ -9,9 +9,8 @@
 #include "HlpSolve.h"
 #include <stdbool.h>
 
-// not sure what it causing this to be needed, but something breaks
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
+//#pragma GCC push_options
+//#pragma GCC optimize ("O0")
 
 typedef struct branch_layer_s {
     uint64_t map;
@@ -397,4 +396,4 @@ void hlpSetCacheSize(int size) {
     cacheMask = (1 << size) - 1;
 }
 
-#pragma GCC pop_options
+//#pragma GCC pop_options

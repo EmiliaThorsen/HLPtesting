@@ -4,6 +4,8 @@
 
 enum SearchAccuracy { ACCURACY_REDUCED=-1, ACCURACY_NORMAL, ACCURACY_INCREASED, ACCURACY_PERFECT };
 
+extern void bitonic_sort4x16x8(uint8_t* arrays);
+
 
 // the start position, or at least the pretty one that can be used outside the solver
 extern const uint64_t hlpStartPos;

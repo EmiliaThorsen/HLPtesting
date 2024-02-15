@@ -92,12 +92,12 @@ void randomSearch(int count, int group, int maxDepth, int accuracy) {
 
 
 enum LONG_OPTIONS {
-    OPTION_ACCURACY=1000,
-    OPTION_CACHE,
-    OPTION_MAX_DEPTH,
-    OPTION_RANDOM_SEARCH,
-    OPTION_RANDOM_SEARCH_GROUP,
-    OPTION_RANDOM_SEED
+    MOPTION_ACCURACY=1000,
+    MOPTION_CACHE,
+    MOPTION_MAX_DEPTH,
+    MOPTION_RANDOM_SEARCH,
+    MOPTION_RANDOM_SEARCH_GROUP,
+    MOPTION_RANDOM_SEED
 };
 
 const char doc[] = "Find an HLP chain for the given function.";
@@ -132,14 +132,14 @@ char** appendStr(char** str1, char* str2) {
 static struct argp_option options[] = {
     { "verbose", 'v', "LEVEL", OPTION_ARG_OPTIONAL, "Increase or set verbosity" },
     { "quiet", 'q', 0, 0, "Suppress additional info" },
-    { "cache", OPTION_CACHE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
-    { "max-length", OPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
-    { "accuracy", OPTION_ACCURACY, "LEVEL", 0, "Set search accuracy from -1 to 2, 0 being normal, 2 being perfect" },
+    { "cache", MOPTION_CACHE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
+    { "max-length", MOPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
+    { "accuracy", MOPTION_ACCURACY, "LEVEL", 0, "Set search accuracy from -1 to 2, 0 being normal, 2 being perfect" },
     { "fast", 'f', 0, 0, "Equivilant to --accuracy -1" },
     { "perfect", 'p', 0, 0, "Equivilant to --accuracy 2" },
-    { "random", OPTION_RANDOM_SEARCH, "N", 0, "Search N random cases instead of the desired map" },
-    { "random-group", OPTION_RANDOM_SEARCH_GROUP, "N", 0, "Only check cases with N unique outputs when searching randomly, 0 for any. default: 0" },
-    { "seed", OPTION_RANDOM_SEED, "SEED", 0, "Set the random seed" },
+    { "random", MOPTION_RANDOM_SEARCH, "N", 0, "Search N random cases instead of the desired map" },
+    { "random-group", MOPTION_RANDOM_SEARCH_GROUP, "N", 0, "Only check cases with N unique outputs when searching randomly, 0 for any. default: 0" },
+    { "seed", MOPTION_RANDOM_SEED, "SEED", 0, "Set the random seed" },
     { 0 }
 };
 
@@ -155,7 +155,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
         case 'q':
             settings->verbosity = 0;
             break;
-        case OPTION_ACCURACY:
+        case MOPTION_ACCURACY:
             int level = atoi(arg);
             if (level < -1 || level > 2)
                 argp_error(state, "%s is not a valid accuracy", arg);
@@ -163,27 +163,28 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
                 settings->accuracy = level;
             break;
         case 'f':
-            return parse_opt(OPTION_ACCURACY, "-1", state);
+            return parse_opt(MOPTION_ACCURACY, "-1", state);
         case 'p':
-            return parse_opt(OPTION_ACCURACY, "2", state);
-        case OPTION_RANDOM_SEARCH:
+            return parse_opt(MOPTION_ACCURACY, "2", state);
+        case MOPTION_RANDOM_SEARCH:
             settings->randomSearchCount = atoi(arg);
             break;
-        case OPTION_RANDOM_SEARCH_GROUP:
+        case MOPTION_RANDOM_SEARCH_GROUP:
             int group = atoi(arg);
             if (group < 1 || group > 16)
                 argp_error(state, "%s unique outputs is impossible", arg);
             else
                 settings->randomSearchGroup = group;
             break;
-        case OPTION_RANDOM_SEED:
+        case MOPTION_RANDOM_SEED:
             settings->randomSeed = atoi(arg);
             break;
-        case OPTION_MAX_DEPTH:
+        case MOPTION_MAX_DEPTH:
             settings->maxDepth = atoi(arg);
             break;
-        case OPTION_CACHE:
+        case MOPTION_CACHE:
             hlpSetCacheSize(atoi(arg) - 4);
+            break;
         case ARGP_KEY_ARG:
             appendStr(&(settings->map), arg);
             break;
@@ -207,8 +208,30 @@ static struct argp argp = {
     doc
 };
 
+void print_arrays4x16x8(uint8_t* arrays) {
+    for (int i = 0; i < 64; i++) {
+        printf("%3u", arrays[i]);
+        if (i % 16 == 15)
+            printf("\n");
+        else
+            printf(", ");
+    }
+}
+
+void test() {
+    uint8_t arrays[64];
+    for (int i = 0; i < 64; i++)
+        arrays[i] = rand() & 0xff;
+    print_arrays4x16x8(arrays);
+    bitonic_sort4x16x8(arrays);
+    printf("\n");
+    print_arrays4x16x8(arrays);
+
+}
 
 int main(int argc, char** argv) {
+    /* test(); return 0; */
+
     struct arg_settings settings;
     error_t argpError = argp_parse(&argp, argc, argv, 0, 0, &settings);
     if (argpError) return argpError;

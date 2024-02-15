@@ -30,7 +30,7 @@ AS_INC_FLAGS := $(addprefix -i, $(INC_DIRS))
 CCFLAGS += -march=native $(C_INC_FLAGS) -MMD -MP -O4
 CXXFLAGS += -march=native $(C_INC_FLAGS) -MMD -MP -O4
 ASFLAGS += -felf64 $(AS_INC_FLAGS) -MD -MP
-LDFLAGS += -z noexecstack
+LDFLAGS += -z noexecstack -O4
 
 ifdef WERROR
 	CCFLAGS += -Werror

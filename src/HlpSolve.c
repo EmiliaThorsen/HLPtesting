@@ -327,7 +327,7 @@ int singleSearchInner(int maxDepth) {
     while (currLayer <= maxDepth) {
         if(dfs(startPos, 0, 799)) return currLayer;
         invalidateCache();
-        /* printf("search over layer: %d done!\n",currLayer); */
+        printf("search over layer: %d done!\n",currLayer);
         /* printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC); */
         currLayer++;
     }

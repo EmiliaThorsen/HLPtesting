@@ -45,5 +45,6 @@ uint16_t getLayerConf(int group, int layerId);
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index);
 uint16_t getNextValidLayerSize(int group, int layerId);
 
+void printChain(uint16_t* chain, int length);
 
 #endif

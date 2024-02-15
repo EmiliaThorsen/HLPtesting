@@ -17,9 +17,7 @@ void printSearch(char* map, int maxDepth, int accuracy) {
         printf("no result found\n");
     } else {
         printf("result found, length %d: ", length);
-        for (int i=0; i<length; i++) {
-            printf("\t%03hx", result[i]);
-        }
+        printChain(result, length);
         printf("\n");
     }
 }

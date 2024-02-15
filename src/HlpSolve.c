@@ -396,4 +396,20 @@ void hlpSetCacheSize(int size) {
     cacheMask = (1 << size) - 1;
 }
 
+void printChain(uint16_t* chain, int length) {
+    const char layerStrings[][16] = {
+        "%X, %X",
+        "%X, *%X",
+        "*%X, %X",
+        "*%X, *%X",
+        "^%X, *%X",
+        "%X, ^*%X"
+    };
+    for (int i = 0; i < length; i++) {
+        uint16_t conf = chain[i];
+        printf(layerStrings[conf >> 8], (conf >> 4) & 15, conf & 15);
+        if (i < length - 1) printf(";  ");
+    }
+}
+
 //#pragma GCC pop_options

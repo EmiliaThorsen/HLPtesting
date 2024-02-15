@@ -70,12 +70,14 @@ uint16_t getLayerConf(int group, int layerId) { return layerConfAll[group - 1][l
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index) { return nextValidLayersAll[group - 1][800 * prevLayerId + index]; }
 uint16_t getNextValidLayerSize(int group, int layerId) { return nextValidLayersSizeAll[group - 1][layerId]; }
 
-int iter;
+// this has actually achieved 32 bit overflow before
+long iter;
 int currLayer;
 int _uniqueOutputs;
 int _solutionsFound;
 int _searchAccuracy;
 uint16_t* _outputChain;
+clock_t programStartT;
 
 //counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
 int getGroup(uint64_t x) {
@@ -98,7 +100,7 @@ bool inList(uint64_t item, uint64_t* list, int maxIndex) {
 }
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
 void precomputeLayers(int group) {
-    if ((layerPrecomputesFinished << (group - 1)) & 1) {
+    if ((layerPrecomputesFinished >> (group - 1)) & 1) {
         layerConf = layerConfAll[group-1];
         nextValidLayers = nextValidLayersAll[group-1];
         nextValidLayerLuts = nextValidLayerLutsAll[group-1];
@@ -112,12 +114,12 @@ void precomputeLayers(int group) {
     nextValidLayerLuts = calloc(800*800, sizeof(uint64_t));
     nextValidLayersSize = malloc(800*sizeof(int));
 
-    /* printf("starting layer precompute\n"); */
     int64_t flag;
     aatree_node* uniqueNextLayersTree = aa_tree_insert(startPos, NULL, &flag);
     /* uint64_t* uniqueNextLayersList = calloc(800*800, sizeof(uint64_t)); */
     /* for (int i=0; i<800*800; i++) uniqueNextLayersList[i] = 0; */
 
+    if (hlpSolveVerbosity >= 3) printf("starting layer precompute\n");
     for(int conf = 0; conf < 1536; conf++) {
         uint64_t output = layer(startPos, conf);
         if(getGroup(output) < group) continue;
@@ -134,7 +136,7 @@ void precomputeLayers(int group) {
     }
     nextValidLayersSize[799] = layerCount;
     long totalNext = layerCount;
-    /* printf("starting next layer compute\n"); */
+    if (hlpSolveVerbosity >= 3) printf("starting next layer precompute\n");
     for(int conf = 0; conf < layerCount; conf++) {
         uint64_t layerOut = nextValidLayerLuts[799*800 + conf];
         int nextLayerSize = 0;
@@ -167,9 +169,11 @@ void precomputeLayers(int group) {
     nextValidLayersSizeAll[group-1] = nextValidLayersSize;
     layerPrecomputesFinished |= 1 << (group -1);
 
-    /* printf("layers computed:%d, total next layers:%ld\n", layerCount, totalNext - layerCount); */
-}
+    if (hlpSolveVerbosity < 3) return;
 
+    printf("layer precompute done at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
+    printf("layers computed:%d, total next layers:%'ld\n", layerCount, totalNext - layerCount);
+}
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
 int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
@@ -180,9 +184,7 @@ int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
 
     iter -= index;
 
-    /* printf("found solution\n"); */
     uint16_t config = layerConf[nextValidLayers[prevLayerConf * 800 + index]];
-    /* printf("depth: %d configuration: %03hx\n", currLayer - 1, config); */
     if (_solutionsFound != -1) {
         _solutionsFound++;
         return 0;
@@ -196,6 +198,7 @@ long sameDepthHits = 0;
 long difLayerHits = 0;
 long misses = 0;
 long bucketUtil = 0;
+long cacheChecksTotal = 0;
 
 
 typedef struct cache_entry_s {
@@ -206,7 +209,6 @@ typedef struct cache_entry_s {
 
 cache_entry_t* cacheArr;
 uint64_t cacheMask;
-int cacheChecksTotal;
 uint32_t cacheTrialGlobal = 0;
 
 void clearCache() {
@@ -218,9 +220,18 @@ void clearCache() {
 }
 
 int cacheCheck(uint64_t output, int depth) {
-    uint32_t pos = _mm_crc32_u32(output & UINT32_MAX, output >> 32) & cacheMask;
+    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & UINT32_MAX), output >> 32) & cacheMask;
     cache_entry_t* entry = cacheArr + pos;
-    if (entry->map == output && entry->depth <= depth && entry->trial == cacheTrialGlobal) return 1;
+    cacheChecksTotal++;
+    if (entry->map == output && entry->depth <= depth && entry->trial == cacheTrialGlobal) {
+        if (entry->depth == depth) sameDepthHits++;
+        else difLayerHits++;
+        return 1;
+    }
+
+    if (entry->trial == cacheTrialGlobal && entry->map != output) misses++;
+    else bucketUtil++;
+
 
     entry->map = output;
     entry->depth = depth;
@@ -273,34 +284,32 @@ int dfs(uint64_t input, int depth, int prevLayerConf) {
             );
 
     // this adds a very slight boost by checking more promising branches first
-    if (depth < currLayer >> 1)
+    if (depth < 4)
         qsort(potentialLayers + 800*depth, totalNextLayersIdentified, sizeof(branch_layer_t), cmpfunc);
 
     for(int i = 0; i < totalNextLayersIdentified; i++) {
         branch_layer_t* entry = potentialLayers + 800*depth + i;
         int conf = entry->configIndex;
-        /* uint64_t output = apply_and_check(input, nextValidLayerLuts[800*prevLayerConf + conf], currLayer - depth - 1); */
-        /* if (output == 0) printf("a"); */
         uint64_t output = entry->map;
 
         //cache check
         if(cacheCheck(output, depth)) continue;
 
-
-
         int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
         if(dfs(output, depth + 1, index)) {
             if (_outputChain != 0) _outputChain[depth] = layerConf[index];
-            /* printf("depth: %d configuration: %03hx\n", depth, layerConf[index]); */
             return 1;
         }
-        /* if(depth == 0 & currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]); */
+        if (hlpSolveVerbosity < 3) continue;
+        if(depth == 0 && currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
     }
     return 0;
 }
 
+
 void init(uint64_t map) {
+    programStartT = clock();
     if (!cacheArr) cacheArr = calloc((1 << cacheSize), sizeof(cache_entry_t));
     cacheMask = (1 << cacheSize) - 1;
     iter = 0;
@@ -320,20 +329,29 @@ int searchOneDepth(int depth) {
 int singleSearchInner(int maxDepth) {
     currLayer = 1;
 
-    /* clock_t programStartT = clock(); */
-    /* printf("layer precompute done at %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC); */
-    /* printf("starting search!\n"); */
-
     while (currLayer <= maxDepth) {
-        if(dfs(startPos, 0, 799)) return currLayer;
+        if(dfs(startPos, 0, 799)) {
+            if (hlpSolveVerbosity >= 3) {
+                printf("solution found at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
+                printf("total iter over all: %'ld\n", iter);
+                printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n", cacheChecksTotal, sameDepthHits, difLayerHits, misses, bucketUtil);
+            }
+            return currLayer;
+        }
         invalidateCache();
-        printf("search over layer: %d done!\n",currLayer);
-        /* printf("layer search done after %fs\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC); */
         currLayer++;
+
+        if (hlpSolveVerbosity < 2) continue;
+        printf("search over layer %d done\n",currLayer - 1);
+
+        if (hlpSolveVerbosity < 3) continue;
+        printf("layer search done after %.2fms; %'ld iterations\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000, iter);
+    }
+    if (hlpSolveVerbosity >= 2) {
+        printf("failed to beat depth\n");
+        printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n", cacheChecksTotal, sameDepthHits, difLayerHits, misses, bucketUtil);
     }
     return maxDepth + 1;
-    /* printf("total iter over all: %ld\n", iter); */
-    /* printf("cache checks: %ld; same depth hits:%ld; dif layer hits:%ld; misses: %ld; bucket utilization: %ld\n", cacheChecksTotal, sameDepthHits, difLayerHits, misses, bucketUtil); */
 }
 
 int singleSearch(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
@@ -367,6 +385,11 @@ int solveN(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy 
     _solutionsFound = -1;
     int solutionLength = maxDepth;
 
+    if (hlpSolveVerbosity >= 2) {
+        if (accuracy > ACCURACY_REDUCED) printf("starting presearch\n");
+        else printf("starting search\n");
+    }
+
     // reduced accuracy search is sometimes faster than the others but
     // still often gets an optimal solution, so we start with that so the
     // "real" search can cut short if it doesn't find a better solution.
@@ -376,9 +399,15 @@ int solveN(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy 
 
     if (solutionLength == maxDepth) solutionLength = maxDepth;
     if (accuracy == ACCURACY_REDUCED) return solutionLength;
+    long totalIter = iter;
+    iter = 0;
+
+    if (hlpSolveVerbosity >= 2) printf("starting main search\n");
 
     _searchAccuracy = accuracy;
-    return singleSearchInner(solutionLength - 1);
+    int result = singleSearchInner(solutionLength - 1);
+    if (hlpSolveVerbosity >= 2) printf("total iter across searches: %'ld\n", totalIter + iter);
+    return result;
 }
 
 int solve(char* map, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {

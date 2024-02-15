@@ -5,6 +5,7 @@
 #include <string.h>
 #include <immintrin.h>
 #include <time.h>
+#include <locale.h>
 
 int global_verbosity;
 
@@ -129,7 +130,7 @@ char** appendStr(char** str1, char* str2) {
 
 static struct argp_option options[] = {
     { "verbose", 'v', "LEVEL", OPTION_ARG_OPTIONAL, "Increase or set verbosity" },
-    { "quiet", 'q', 0, 0, "Suppress additional info" },
+    { "quiet", 'q', 0, 0, "Suppress additional info (currently does nothing)" },
     { "cache", MOPTION_CACHE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
     { "max-length", MOPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
     { "accuracy", MOPTION_ACCURACY, "LEVEL", 0, "Set search accuracy from -1 to 2, 0 being normal, 2 being perfect" },
@@ -229,12 +230,14 @@ void test() {
 
 int main(int argc, char** argv) {
     /* test(); return 0; */
+    setlocale(LC_NUMERIC, "");
 
     struct arg_settings settings;
     error_t argpError = argp_parse(&argp, argc, argv, 0, 0, &settings);
     if (argpError) return argpError;
 
     srand(settings.randomSeed);
+    hlpSolveVerbosity = settings.verbosity;
 
     if (settings.randomSearchCount == 0)
         printSearch(settings.map, settings.maxDepth, settings.accuracy);

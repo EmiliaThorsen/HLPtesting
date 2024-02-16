@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "HlpSolve.h"
-#include <argp.h>
+#include "config.h"
+#include "argp.h"
 #include <string.h>
 #include <immintrin.h>
 #include <time.h>

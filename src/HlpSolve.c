@@ -4,10 +4,12 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
-#include <immintrin.h>
+#include <emmintrin.h>
+/* #include <intrin.h> */
 #include "aa_tree.h"
 #include "HlpSolve.h"
 #include <stdbool.h>
+#include "bitonicSort.h"
 
 //#pragma GCC push_options
 //#pragma GCC optimize ("O0")
@@ -15,33 +17,10 @@
 typedef struct branch_layer_s {
     uint64_t map;
     uint16_t configIndex;
-    uint8_t separations;
-    uint8_t padding[5];
+    /* uint8_t separations; */
 } branch_layer_t;
 
-extern uint64_t apply_mapping(uint64_t input, uint64_t map);
-extern uint64_t apply_and_check(uint64_t input, uint64_t map, int threshhold);
 
-extern void uint_to_array(uint64_t uint, uint8_t* array);
-
-// takes a uint from a pretty form to one that works nicely for vectorizing
-extern uint64_t fix_uint(uint64_t uint);
-
-extern uint64_t layer(uint64_t map, uint16_t config);
-
-extern int batch_apply_and_check(
-        uint64_t start,
-        uint64_t* input_maps,
-        branch_layer_t* outputs,
-        int quantity,
-        int threshhold
-        );
-
-extern int search_last_layer(
-        uint64_t input,
-        uint64_t* maps,
-        int quantity,
-        uint64_t goal);
 
 const uint64_t hlpStartPos = 0x0123456789abcdef;
 const uint64_t startPos = 0x7f6e5d4c3b2a1908;
@@ -50,7 +29,7 @@ int cacheSize = 22;
 
 uint64_t wanted;
 
-uint8_t goal[16]; //goal in array form instead of packed nibbles in uint
+__m128i goal;
 
 //precomputed layer lookup tables
 uint16_t* layerConf;
@@ -70,7 +49,6 @@ uint16_t getLayerConf(int group, int layerId) { return layerConfAll[group - 1][l
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index) { return nextValidLayersAll[group - 1][800 * prevLayerId + index]; }
 uint16_t getNextValidLayerSize(int group, int layerId) { return nextValidLayersSizeAll[group - 1][layerId]; }
 
-// this has actually achieved 32 bit overflow before
 long iter;
 int currLayer;
 int _uniqueOutputs;
@@ -79,25 +57,197 @@ int _searchAccuracy;
 uint16_t* _outputChain;
 clock_t programStartT;
 
+const uint64_t lowHalvesMask64 = 0x0f0f0f0f0f0f0f0f;
+const __m128i lowHalvesMask128 = {lowHalvesMask64, lowHalvesMask64};
+const __m256i lowHalvesMask256 = {lowHalvesMask64, lowHalvesMask64, lowHalvesMask64, lowHalvesMask64};
+
+__m256i lowHalvesMask256_2() {
+    // todo: find a way to do this that gcc doesn't deoptimize
+    __m256i ones;
+    ones = _mm256_cmpeq_epi32(ones, ones);
+    ones = _mm256_srli_epi16(ones, 12);
+    ones = _mm256_packus_epi16(ones, ones);
+    return ones;
+}
+
+const __m128i fixUintPerm = {0x0c040d050e060f07, 0x080009010a020b03};
+
+__m128i uintToXmm(uint64_t uint) {
+    __m128i input = _mm_cvtsi64_si128(uint);
+    return _mm_and_si128(_mm_or_si128(_mm_slli_si128(input, 8), _mm_srli_epi64(input, 4)), lowHalvesMask128);
+}
+
+uint64_t xmmToUint(__m128i xmm) {
+    return _mm_cvtsi128_si64(_mm_or_si128(_mm_slli_epi32(xmm, 4), _mm_srli_si128(xmm, 8)));
+}
+
+// converts a "nice" uint64 into one that works properly for applying precomputed maps
+uint64_t fix_uint(uint64_t uint) {
+    return xmmToUint(_mm_shuffle_epi8(uintToXmm(uint), fixUintPerm));
+}
+
+// assumes both are in the "fixed" format
+uint64_t apply_mapping(uint64_t input, uint64_t map) {
+    return xmmToUint(_mm_shuffle_epi8(uintToXmm(map), uintToXmm(input)));
+}
+
+uint64_t layer(uint64_t start, uint16_t config) {
+    // adjust mode if rotated
+    // this makes it so the three bits in upper byte of config are independent
+    config += (config & 0x400) >> 2;
+
+    // unpack map and config
+    __m128i input = uintToXmm(start);
+    __m128i back1 = input;
+    __m128i side2 = input;
+
+    __m128i v_config = _mm_cvtsi32_si128(config);
+    __m128i back2 = _mm_broadcastb_epi8(v_config);
+    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), lowHalvesMask128);
+    back2 = _mm_and_si128(back2, lowHalvesMask128);
+
+    // shift left then arith right so bit we shift to msb gets cast to whole register
+    v_config = _mm_shuffle_epi32(v_config, 0);
+    __m128i mode2 = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 0), 31);
+    __m128i mode1 = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 1), 31);
+    __m128i rotate = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 2), 31);
+
+    // use xor to conditionally swap back1 and side1
+    rotate = _mm_and_si128(rotate, _mm_xor_si128(side1, back1));
+    back1 = _mm_xor_si128(back1, rotate);
+    side1 = _mm_xor_si128(side1, rotate);
+
+    // apply the comparators
+    __m128i output1 = _mm_andnot_si128(_mm_cmpgt_epi8(side1, back1), _mm_sub_epi8(back1, _mm_and_si128(side1, mode1)));
+    __m128i output2 = _mm_andnot_si128(_mm_cmpgt_epi8(side2, back2), _mm_sub_epi8(back2, _mm_and_si128(side2, mode2)));
+    __m128i output = _mm_max_epi8(output1, output2);
+
+    // pack back into uint
+    return xmmToUint(output);
+}
+
+ymm_pair_t quadUnpackMap(__m256i packed) {
+    const __m256i upackShifts = {4, 0, 4, 0};
+    ymm_pair_t pair = {
+        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0x44), upackShifts), lowHalvesMask256),
+        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0xee), upackShifts), lowHalvesMask256)};
+    return pair;
+}
+
+__m256i quadPackMap(ymm_pair_t unpacked) {
+    return _mm256_blend_epi32(
+            _mm256_or_si256(_mm256_srli_si256(unpacked.ymm0, 8), _mm256_slli_epi64(unpacked.ymm0, 4)),
+            _mm256_or_si256(unpacked.ymm1, _mm256_slli_epi64(_mm256_slli_si256(unpacked.ymm1, 8), 4)),
+            0b11001100
+            );
+}
+
+inline __m256i quickGetTestMask() {
+    __m128i dummy;
+    // fortunately, gcc somehow does not deoptimize this
+    return _mm256_castsi128_si256(_mm_cmpeq_epi64(dummy, dummy));
+}
+
+inline __m256i quickGetLow15Mask() {
+    __m256i ymm = {-1,-1,-1,-1};
+    return _mm256_srli_si256(ymm, 1);
+}
+
+int search_last_layer(uint64_t input, uint64_t* maps, int quantity) {
+    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
+    __m256i doubledGoal = _mm256_permute4x64_epi64(_mm256_castsi128_si256(goal), 0x44);
+
+    const __m256i splitTestMask = quickGetTestMask();
+    for (int i = (quantity - 1) / 4; i >= 0; i--) {
+        ymm_pair_t quad = quadUnpackMap(_mm256_loadu_si256(((__m256i*) maps) + i));
+        quad.ymm0 = _mm256_xor_si256(_mm256_shuffle_epi8(quad.ymm0, doubledInput), doubledGoal);
+        quad.ymm1 = _mm256_xor_si256(_mm256_shuffle_epi8(quad.ymm1, doubledInput), doubledGoal);
+        if (i && _mm256_testnzc_si256(splitTestMask, quad.ymm0) && _mm256_testnzc_si256(splitTestMask, quad.ymm1)) continue;
+        if (_mm256_testz_si256(splitTestMask, quad.ymm0)) return 4*i;
+        if (_mm256_testc_si256(splitTestMask, quad.ymm0)) return 4*i + 2;
+        if (_mm256_testz_si256(splitTestMask, quad.ymm1)) return 4*i + 1;
+        if (_mm256_testc_si256(splitTestMask, quad.ymm1)) return 4*i + 3;
+    }
+    return -1;
+}
+
+inline int getLegalDistCheckMask(__m256i sortedYmm, int threshhold) {
+    const __m256i splitTestMask = quickGetTestMask();
+    const __m256i low15Mask = quickGetLow15Mask();
+    __m256i final = _mm256_and_si256(sortedYmm, lowHalvesMask256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), lowHalvesMask256);
+
+    __m256i finalDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(final, 1), final));
+    __m256i currentDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(current, 1), current));
+
+    __m256i illegals = _mm256_and_si256(_mm256_cmpeq_epi8(currentDelta, _mm256_setzero_si256()), finalDelta);
+    illegals = _mm256_and_si256(illegals, low15Mask);
+    int mask = -1;
+    mask &= _mm256_testz_si256(splitTestMask, illegals) | (_mm256_testc_si256(splitTestMask, illegals) << 2);
+
+    uint32_t separationsMask = _mm256_movemask_epi8(_mm256_cmpgt_epi8(finalDelta, currentDelta)) & 0x7fff7fff;
+    mask &= (_popcnt32(separationsMask & 0xffff) <= threshhold) | ((_popcnt32(separationsMask >> 16) <= threshhold) << 2);
+    return mask;
+}
+
+//extern
+int batch_apply_and_check(
+        uint64_t input,
+        uint64_t* maps,
+        branch_layer_t* outputs,
+        int quantity,
+        int threshhold) {
+    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
+    __m256i doubledGoal = _mm256_permute4x64_epi64(_mm256_castsi128_si256(goal), 0x44);
+
+    branch_layer_t* currentOutput = outputs;
+
+    for (int i = (quantity - 1) / 4; i >= 0; i--) {
+        ymm_pair_t quad = quadUnpackMap(_mm256_loadu_si256(((__m256i*) maps) + i));
+        quad.ymm0 = _mm256_shuffle_epi8(quad.ymm0, doubledInput);
+        quad.ymm1 = _mm256_shuffle_epi8(quad.ymm1, doubledInput);
+
+        ymm_pair_t sortedQuad = { _mm256_or_si256(doubledGoal, _mm256_slli_epi64(quad.ymm0, 4)),
+            _mm256_or_si256(doubledGoal, _mm256_slli_epi64(quad.ymm1, 4)) };
+        sortedQuad = bitonic_sort4x16x8_inner(sortedQuad);
+        int mask = getLegalDistCheckMask(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMask(sortedQuad.ymm1, threshhold) << 1);
+        if (i & (mask == 0)) continue;
+        __m256i packed = quadPackMap(quad);
+
+        // can't just use a for loop because const variables aren't const enough
+        currentOutput->configIndex = i * 4 + 3;
+        currentOutput->map = _mm256_extract_epi64(packed, 3);
+        currentOutput += (mask >> 3) & 1;
+
+        currentOutput->configIndex = i * 4 + 2;
+        currentOutput->map = _mm256_extract_epi64(packed, 2);
+        currentOutput += (mask >> 2) & 1;
+
+        currentOutput->configIndex = i * 4 + 1;
+        currentOutput->map = _mm256_extract_epi64(packed, 1);
+        currentOutput += (mask >> 1) & 1;
+
+        currentOutput->configIndex = i * 4;
+        currentOutput->map = _mm256_extract_epi64(packed, 0);
+        currentOutput += mask & 1;
+    }
+
+    return currentOutput - outputs;
+}
+// */
+
+
+
 //counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
 int getGroup(uint64_t x) {
-    int group = 0;
     uint16_t bitFeild = 0;
     for(int i = 0; i < 16; i++) {
         int ss = (x >> (i * 4)) & 15;
-        if(bitFeild & (1 << ss)) continue;
         bitFeild |= 1 << ss;
-        group++;
     }
-    return group;
+    return _popcnt32(bitFeild);
 }
 
-bool inList(uint64_t item, uint64_t* list, int maxIndex) {
-        for (int i=0; i<maxIndex; i++)
-            if (list[i] == item)
-                return 1;
-        return 0;
-}
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
 void precomputeLayers(int group) {
     if ((layerPrecomputesFinished >> (group - 1)) & 1) {
@@ -179,7 +329,7 @@ void precomputeLayers(int group) {
 int fastLastLayerSearch(uint64_t input, int prevLayerConf) {
     int search_size = nextValidLayersSize[prevLayerConf];
     iter += search_size;
-    int index = search_last_layer(input, nextValidLayerLuts + 800*prevLayerConf, search_size, wanted);
+    int index = search_last_layer(input, nextValidLayerLuts + 800*prevLayerConf, search_size);
     if (index == -1) return 0;
 
     iter -= index;
@@ -249,9 +399,10 @@ void invalidateCache() {
     }
 }
 
+/*
 int cmpfunc (const void * a, const void * b) {
    return ( ((branch_layer_t*)a)->separations - ((branch_layer_t*)b)->separations );
-}
+}*/
 
 
 
@@ -284,13 +435,14 @@ int dfs(uint64_t input, int depth, int prevLayerConf) {
             );
 
     // this adds a very slight boost by checking more promising branches first
-    if (depth < 4)
-        qsort(potentialLayers + 800*depth, totalNextLayersIdentified, sizeof(branch_layer_t), cmpfunc);
+    /* if (depth < 4) */
+        /* qsort(potentialLayers + 800*depth, totalNextLayersIdentified, sizeof(branch_layer_t), cmpfunc); */
 
-    for(int i = 0; i < totalNextLayersIdentified; i++) {
+    for(int i = totalNextLayersIdentified - 1; i >= 0; i--) {
         branch_layer_t* entry = potentialLayers + 800*depth + i;
         int conf = entry->configIndex;
         uint64_t output = entry->map;
+        // uint64_t output = layer(input, layerConf[nextValidLayers[prevLayerConf * 800 + conf]]);
 
         //cache check
         if(cacheCheck(output, depth)) continue;
@@ -317,7 +469,7 @@ void init(uint64_t map) {
     wanted = fix_uint(map);
     _uniqueOutputs = getGroup(wanted);
     precomputeLayers(_uniqueOutputs);
-    uint_to_array(wanted, goal);
+    goal = uintToXmm(wanted);
 }
 
 

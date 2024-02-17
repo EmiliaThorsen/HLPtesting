@@ -22,8 +22,8 @@ AC_TYPE_UINT64_T
 AC_TYPE_UINT8_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
-AC_CHECK_FUNCS([setlocale strtoull])
+# AC_FUNC_MALLOC
+AC_CHECK_FUNCS([setlocale strtoull malloc realloc])
 
 AC_CONFIG_HEADERS([config.h])
 

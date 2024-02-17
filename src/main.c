@@ -7,6 +7,7 @@
 #include <immintrin.h>
 #include <time.h>
 #include <locale.h>
+#include "bitonicSort.h"
 
 int global_verbosity;
 

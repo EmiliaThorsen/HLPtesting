@@ -320,8 +320,7 @@
 /* Define to 1 if the system has the type 'long long int'. */
 #define HAVE_LONG_LONG_INT 1
 
-/* Define to 1 if your system has a GNU libc compatible `malloc' function, and
-   to 0 otherwise. */
+/* Define to 1 if you have the `malloc' function. */
 #define HAVE_MALLOC 1
 
 /* Define if malloc, realloc, and calloc set errno on allocation failure. */
@@ -351,6 +350,9 @@
 
 /* Define to 1 if you have the `rawmemchr' function. */
 #define HAVE_RAWMEMCHR 1
+
+/* Define to 1 if you have the `realloc' function. */
+#define HAVE_REALLOC 1
 
 /* Define to 1 if you have the `setlocale' function. */
 #define HAVE_SETLOCALE 1
@@ -1367,9 +1369,6 @@
 #if defined __APPLE__ && defined __MACH__ && __APPLE_CC__ >= 5465 && !defined __cplusplus && __STDC_VERSION__ >= 199901L && !defined __GNUC_STDC_INLINE__
 # define __GNUC_STDC_INLINE__ 1
 #endif
-
-/* Define to rpl_malloc if the replacement function should be used. */
-/* #undef malloc */
 
 /* _GL_CMP (n1, n2) performs a three-valued comparison on n1 vs. n2, where
    n1 and n2 are expressions without side effects, that evaluate to real

@@ -8,7 +8,7 @@ EXTRA_DIST = m4/gnulib-cache.m4
 
 ACLOCAL_AMFLAGS = -I m4
 CCAS = nasm
-AM_CFLAGS = -march=native 
+AM_CFLAGS = -march=native
 AM_CPPFLAGS = -I$(top_builddir)/lib -I$(top_srcdir)/lib
 LDADD = lib/libgnu.a
 

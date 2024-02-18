@@ -76,6 +76,7 @@ __m256i lowHalvesMask256_2() {
 
 const __m128i fixUintPerm = {0x0c040d050e060f07, 0x080009010a020b03};
 const __m256i idenityPermutation = {0x0706050403020100, 0x0f0e0d0c0b0a0908, 0x0706050403020100, 0x0f0e0d0c0b0a0908};
+const __m256i uintMax256 = {-1, -1, -1, -1};
 
 int isHex(char c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
@@ -127,6 +128,7 @@ hlp_request_t parseHlpRequestStr(char* str) {
             c++;
             continue;
         }
+        if (*c == '[' || *c == ']') continue;
         if (isHex(*c)) {
             result.mins = (result.mins << 4) | toHex(*c);
             result.maxs = (result.maxs << 4) | toHex(*c);
@@ -238,7 +240,64 @@ inline __m256i quickGetLow15Mask() {
     return _mm256_srli_si256(ymm, 1);
 }
 
-inline int getLegalDistCheckMaskExact(__m256i sortedYmm, int threshhold) {
+inline ymm_pair_t combineRangesInner(__m256i equalityReference, ymm_pair_t mins, int shift) {
+    if (shift > 0) {
+        // left shift
+        __m256i mask = _mm256_cmpeq_epi8(equalityReference, _mm256_srli_si256(equalityReference, shift));
+        mins.ymm0 = _mm256_max_epu8(mins.ymm0, _mm256_slli_si256(_mm256_and_si256(mins.ymm0, mask), shift));
+        mins.ymm1 = _mm256_max_epu8(mins.ymm1, _mm256_slli_si256(_mm256_and_si256(mins.ymm1, mask), shift));
+    } else {
+        // right shift
+        __m256i mask = _mm256_cmpeq_epi8(equalityReference, _mm256_slli_si256(equalityReference, -shift));
+        mins.ymm0 = _mm256_max_epu8(mins.ymm0, _mm256_srli_si256(_mm256_and_si256(mins.ymm0, mask), -shift));
+        mins.ymm1 = _mm256_max_epu8(mins.ymm1, _mm256_srli_si256(_mm256_and_si256(mins.ymm1, mask), -shift));
+    }
+}
+
+inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
+    // we invert the max values so that after shifting things, any zeros
+    // shifted in will not affect anything, as we only combine things with max
+    // function
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uintMax256);
+
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 1);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 2);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 4);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 8);
+
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -1);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -2);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -4);
+    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -8);
+
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uintMax256);
+}
+
+inline int getLegalDistCheckMaskRanged(__m256i sortedYmm, int threshhold) {
+    const __m256i splitTestMask = quickGetTestMask();
+    const __m256i low15Mask = quickGetLow15Mask();
+    __m256i finalIndices = _mm256_and_si256(sortedYmm, lowHalvesMask256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), lowHalvesMask256);
+    ymm_pair_t final = {_mm256_shuffle_epi8(goalMin, finalIndices), _mm256_shuffle_epi8(goalMax, finalIndices)};
+    final = combineRanges(current, final);
+
+    // if the min is higher than the max, that's all we need to know
+    __m256i illegals = _mm256_cmpgt_epi8(final.ymm0, final.ymm1);
+    int mask = -1;
+    mask &= _mm256_testz_si256(splitTestMask, illegals) | (_mm256_testc_si256(splitTestMask, illegals) << 2);
+
+    __m256i finalDelta = _mm256_max_epi8(
+            _mm256_sub_epi8(final.ymm0, _mm256_srli_si256(final.ymm1, 1)),
+            _mm256_sub_epi8(_mm256_srli_si256(final.ymm0, 1), final.ymm1)
+            );
+    __m256i currentDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(current, 1), current));
+
+    uint32_t separationsMask = _mm256_movemask_epi8(_mm256_cmpgt_epi8(finalDelta, currentDelta)) & 0x7fff7fff;
+    mask &= (_popcnt32(separationsMask & 0xffff) <= threshhold) | ((_popcnt32(separationsMask >> 16) <= threshhold) << 2);
+    return mask;
+}
+
+inline int getLegalDistCheckMaskPartial(__m256i sortedYmm, int threshhold) {
     const __m256i splitTestMask = quickGetTestMask();
     const __m256i low15Mask = quickGetLow15Mask();
     __m256i final = _mm256_and_si256(sortedYmm, lowHalvesMask256);
@@ -262,11 +321,16 @@ int batchApplyAndCheckExact(
         uint64_t* maps,
         branch_layer_t* outputs,
         int quantity,
-        int threshhold) {
+        int threshhold,
+        const int variant) {
     __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
 
     // this contains extra bits to overwrite the current value on dont care entries
-    __m256i doubledGoal = _mm256_or_si256(goalMin, dontCareMask);
+    __m256i doubledGoal;
+    if (variant == HLP_SOLVE_TYPE_RANGED) 
+        doubledGoal = idenityPermutation;
+    else
+        doubledGoal = _mm256_or_si256(goalMin, dontCareMask);
 
     branch_layer_t* currentOutput = outputs;
 
@@ -281,7 +345,11 @@ int batchApplyAndCheckExact(
 
         sortedQuad.ymm0 = _mm256_shuffle_epi8(sortedQuad.ymm0, dontCarePostSortPerm);
         sortedQuad.ymm1 = _mm256_shuffle_epi8(sortedQuad.ymm1, dontCarePostSortPerm);
-        int mask = getLegalDistCheckMaskExact(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskExact(sortedQuad.ymm1, threshhold) << 1);
+        int mask;
+        if (variant == HLP_SOLVE_TYPE_RANGED)
+            mask = getLegalDistCheckMaskRanged(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskRanged(sortedQuad.ymm1, threshhold) << 1);
+        else
+            mask = getLegalDistCheckMaskPartial(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskPartial(sortedQuad.ymm1, threshhold) << 1);
         if (i & (mask == 0)) continue;
         __m256i packed = quadPackMap(quad);
 
@@ -325,7 +393,9 @@ int getMinGroup(uint64_t mins, uint64_t maxs) {
         mins >>= 4;
         maxs >>= 4;
     }
-    return _popcnt32(bitFeild);
+    int result = _popcnt32(bitFeild);
+    if (!result) return 1;
+    return result;
 }
 
 //precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
@@ -406,9 +476,8 @@ void precomputeLayers(int group) {
 }
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
-int fastLastLayerSearchExact(uint64_t input, int prevLayerConf) {
+int fastLastLayerSearch(uint64_t input, int prevLayerConf, const int variant) {
     __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
-    __m256i doubledGoal = goalMin;
 
     __m256i* quadMaps = (__m256i*) (nextValidLayerLuts + 800*prevLayerConf);
 
@@ -416,8 +485,17 @@ int fastLastLayerSearchExact(uint64_t input, int prevLayerConf) {
     const __m256i splitTestMask = quickGetTestMask();
     for (int i = (nextValidLayersSize[prevLayerConf] - 1) / 4; i >= 0; i--) {
         ymm_pair_t quad = quadUnpackMap(_mm256_loadu_si256(quadMaps + i));
-        quad.ymm0 = _mm256_andnot_si256(dontCareMask, _mm256_xor_si256(_mm256_shuffle_epi8(quad.ymm0, doubledInput), doubledGoal));
-        quad.ymm1 = _mm256_andnot_si256(dontCareMask, _mm256_xor_si256(_mm256_shuffle_epi8(quad.ymm1, doubledInput), doubledGoal));
+
+        // determine if there are any spots that do not match up
+        // if all zeros, that means they match
+        // instead of split tests based on variant, the ranged test is only 2
+        // cycles longer than the exact mode, so we just use ranged for
+        // everything to avoid branches
+        quad.ymm0 = _mm256_shuffle_epi8(quad.ymm0, doubledInput);
+        quad.ymm1 = _mm256_shuffle_epi8(quad.ymm1, doubledInput);
+        quad.ymm0 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm0), _mm256_cmpgt_epi8(quad.ymm0, goalMax));
+        quad.ymm1 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm1), _mm256_cmpgt_epi8(quad.ymm1, goalMax));
+        // no need to apply dontCareMask, they already will always succeed anyways
         if (i && _mm256_testnzc_si256(splitTestMask, quad.ymm0) && _mm256_testnzc_si256(splitTestMask, quad.ymm1)) continue;
 
         bool successes[] = {
@@ -521,7 +599,7 @@ branch_layer_t potentialLayers[800*32];
 
 //main dfs recursive search function
 int dfs(uint64_t input, int depth, int prevLayerConf) {
-    if(depth == currLayer - 1) return fastLastLayerSearchExact(input, prevLayerConf);
+    if(depth == currLayer - 1) return fastLastLayerSearch(input, prevLayerConf, solveType);
     iter += nextValidLayersSize[prevLayerConf];
 
     int totalNextLayersIdentified = batchApplyAndCheckExact(
@@ -529,7 +607,8 @@ int dfs(uint64_t input, int depth, int prevLayerConf) {
             nextValidLayerLuts + prevLayerConf*800,
             potentialLayers + 800*depth,
             nextValidLayersSize[prevLayerConf],
-            getDistThreshold(currLayer - depth - 1)
+            getDistThreshold(currLayer - depth - 1),
+            solveType
             );
 
     // this adds a very slight boost by checking more promising branches first
@@ -637,14 +716,19 @@ int singleSearch(hlp_request_t request, uint16_t* outputChain, int maxDepth, enu
 int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
     int requestedMaxDepth = maxDepth;
     if (maxDepth < 0 || maxDepth > 31) maxDepth = 31;
-    if (request.mins == 0) {
-        if (outputChain) outputChain[0] = 0x2f0;
-        return 1;
-    }
 
     if (init(request)) {
         printf("an error occurred\n");
         return requestedMaxDepth + 1;
+    }
+
+    // test specifically for identity and K0, as those do not show up in the search
+    if (_mm256_testz_si256(_mm256_or_si256(_mm256_cmpgt_epi8(goalMin, idenityPermutation), _mm256_cmpgt_epi8(idenityPermutation, goalMax)), uintMax256)) {
+        return 0;
+    }
+    if (request.mins == 0) {
+        if (outputChain) outputChain[0] = 0x2f0;
+        return 1;
     }
 
     _outputChain = outputChain;

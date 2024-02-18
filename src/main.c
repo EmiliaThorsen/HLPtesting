@@ -140,13 +140,13 @@ char** appendStr(char** str1, char* str2) {
     if (!str2) return str1;
 
     if (*str1) {
-        char* newStr = malloc(strlen(*str1) + strlen(str2));
+        char* newStr = malloc(strlen(*str1) + strlen(str2) + 1);
         strcpy(newStr, *str1);
         if (str2) strcat(newStr, str2);
         free(*str1);
         *str1 = newStr;
     } else {
-        *str1 = malloc(strlen(str2));
+        *str1 = malloc(strlen(str2) + 1);
         strcpy(*str1, str2);
     }
 

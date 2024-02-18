@@ -36,7 +36,13 @@ void printSearch(char* map, int maxDepth, int accuracy) {
     if (length > maxDepth) {
         printf("no result found\n");
     } else {
-        printf("result found, length %d: ", length);
+        printf("result found, length %d", length);
+        if (request.solveType != HLP_SOLVE_TYPE_EXACT) {
+            printf(" (");
+            printHlpMap(applyChain(hlpStartPos, result, length));
+            printf(")");
+        }
+        printf(":  ");
         printChain(result, length);
         printf("\n");
     }

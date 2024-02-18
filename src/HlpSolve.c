@@ -45,9 +45,9 @@ uint64_t* nextValidLayerLutsAll[16] = {0};
 int* nextValidLayersSizeAll[16] = {0};
 uint16_t layerPrecomputesFinished = 0;
 
-// i find it very satisfying that these two are entirely made of 4 letter words
 __m256i dontCareMask;
 __m256i dontCarePostSortPerm;
+int dontCareCount;
 
 uint16_t getLayerConf(int group, int layerId) { return layerConfAll[group - 1][layerId];}
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index) { return nextValidLayersAll[group - 1][800 * prevLayerId + index]; }
@@ -583,9 +583,9 @@ int init(hlp_request_t request) {
     goalMin = _mm256_permute4x64_epi64(_mm256_castsi128_si256(prettyUintToXmm(request.mins)), 0x44);
     goalMax = _mm256_permute4x64_epi64(_mm256_castsi128_si256(prettyUintToXmm(request.maxs)), 0x44);
 
-
     dontCareMask = _mm256_cmpeq_epi8(_mm256_sub_epi8(goalMax, goalMin), lowHalvesMask256);
-    dontCarePostSortPerm = _mm256_min_epi8(idenityPermutation, _mm256_set1_epi8(_uniqueOutputs - 1));
+    dontCareCount = _popcnt32(_mm_movemask_epi8(_mm256_castsi256_si128(dontCareMask)));
+    dontCarePostSortPerm = _mm256_min_epi8(idenityPermutation, _mm256_set1_epi8(15 - dontCareCount));
 
     return 0;
 }
@@ -686,6 +686,13 @@ void hlpSetCacheSize(int size) {
     cacheMask = (1 << size) - 1;
 }
 
+uint64_t applyChain(uint64_t start, uint16_t* chain, int length) {
+    for (int i = 0; i < length; i++) {
+        start = layer(start, chain[i]);
+    }
+    return start;
+}
+
 void printChain(uint16_t* chain, int length) {
     const char layerStrings[][16] = {
         "%X, %X",
@@ -693,13 +700,18 @@ void printChain(uint16_t* chain, int length) {
         "*%X, %X",
         "*%X, *%X",
         "^%X, *%X",
-        "%X, ^*%X"
+        "^*%X, %X"
     };
     for (int i = 0; i < length; i++) {
         uint16_t conf = chain[i];
         printf(layerStrings[conf >> 8], (conf >> 4) & 15, conf & 15);
         if (i < length - 1) printf(";  ");
     }
+}
+
+void printHlpMap(uint64_t map) {
+    hlp_request_t request = {map, map};
+    printHlpRequest(request);
 }
 
 void printHlpRequest(hlp_request_t request) {

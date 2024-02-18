@@ -40,10 +40,7 @@ hlp_request_t parseHlpRequestStr(char* str);
 
 void printHlpRequest(hlp_request_t request);
 
-/* same as solve, but takes a uint64 as input
- */
-int solveN(uint64_t m, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy);
-
+void printHlpMap(uint64_t map);
 
 /* safely set the cache size (changes will apply on next search)
  * cache will have 2 ** size entries, with 16 byte entries
@@ -55,6 +52,9 @@ void hlpSetCacheSize(int size);
 uint16_t getLayerConf(int group, int layerId);
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index);
 uint16_t getNextValidLayerSize(int group, int layerId);
+
+
+uint64_t applyChain(uint64_t start, uint16_t* chain, int length);
 
 void printChain(uint16_t* chain, int length);
 

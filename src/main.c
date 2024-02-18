@@ -215,6 +215,9 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
             settings->maxDepth = 31;
             settings->randomSeed = time(NULL);
             break;
+        case ARGP_KEY_NO_ARGS:
+            argp_state_help(state, stderr, ARGP_HELP_USAGE | ARGP_HELP_SHORT_USAGE | ARGP_HELP_SEE);
+            return 1;
     }
     return 0;
 }

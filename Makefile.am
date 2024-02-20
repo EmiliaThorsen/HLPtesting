@@ -1,8 +1,14 @@
 AUTOMAKE_OPTIONS = subdir-objects
 SUBDIRS = lib
-bin_PROGRAMS = hlpsolve
+bin_PROGRAMS = hlpt
 
-hlpsolve_SOURCES = ./src/main.c ./src/HlpSolve.h ./src/HlpSolve.c ./src/bitonicSort.h ./src/bitonicSort.c ./src/aa_tree.h ./src/aa_tree.c
+hlpt_SOURCES = ./src/main.c
+hlpt_SOURCES += ./src/aa_tree.c
+hlpt_SOURCES += ./src/bitonicSort.c
+hlpt_SOURCES += ./src/command/hex.c
+hlpt_SOURCES += ./src/search/hlp_random.c
+hlpt_SOURCES += ./src/solver/HlpSolve.c
+hlpt_SOURCES += 
 
 EXTRA_DIST = m4/gnulib-cache.m4
 

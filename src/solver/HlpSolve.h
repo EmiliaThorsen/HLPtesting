@@ -1,5 +1,6 @@
 #ifndef HLP_SOLVE
 #define HLP_SOLVE
+#include "../arg_global.h"
 #include <stdint.h>
 
 enum SearchAccuracy { ACCURACY_REDUCED=-1, ACCURACY_NORMAL, ACCURACY_INCREASED, ACCURACY_PERFECT };
@@ -53,9 +54,17 @@ uint16_t getLayerConf(int group, int layerId);
 uint16_t getNextValidLayerId(int group, int prevLayerId, int index);
 uint16_t getNextValidLayerSize(int group, int layerId);
 
+void hlpPrintSearch(char* map);
 
 uint64_t applyChain(uint64_t start, uint16_t* chain, int length);
 
 void printChain(uint16_t* chain, int length);
+
+struct arg_settings_solver_hex {
+    struct arg_settings_global* global;
+    int value;
+};
+
+extern struct argp argp_solver_hex;
 
 #endif

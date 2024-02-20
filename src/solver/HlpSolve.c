@@ -6,10 +6,10 @@
 #include <time.h>
 #include <emmintrin.h>
 /* #include <intrin.h> */
-#include "aa_tree.h"
+#include "../aa_tree.h"
 #include "HlpSolve.h"
 #include <stdbool.h>
-#include "bitonicSort.h"
+#include "../bitonicSort.h"
 
 //#pragma GCC push_options
 //#pragma GCC optimize ("O0")
@@ -61,6 +61,9 @@ int _searchAccuracy;
 uint16_t* _outputChain;
 clock_t programStartT;
 
+int globalMaxDepth;
+int globalAccuracy;
+
 const uint64_t lowHalvesMask64 = 0x0f0f0f0f0f0f0f0f;
 const __m128i lowHalvesMask128 = {lowHalvesMask64, lowHalvesMask64};
 const __m256i lowHalvesMask256 = {lowHalvesMask64, lowHalvesMask64, lowHalvesMask64, lowHalvesMask64};
@@ -76,6 +79,7 @@ __m256i lowHalvesMask256_2() {
 
 const __m128i fixUintPerm = {0x0c040d050e060f07, 0x080009010a020b03};
 const __m256i idenityPermutation = {0x0706050403020100, 0x0f0e0d0c0b0a0908, 0x0706050403020100, 0x0f0e0d0c0b0a0908};
+const __m128i uintMax128 = {-1, -1};
 const __m256i uintMax256 = {-1, -1, -1, -1};
 
 int isHex(char c) {
@@ -83,7 +87,7 @@ int isHex(char c) {
 }
 
 int toHex(char c) {
-    return c - (c <= '9' ? '0' : c <= 'A' ? 'A' - 10 : 'a' - 10);
+    return c - (c <= '9' ? '0' : c <= 'F' ? 'A' - 10 : 'a' - 10);
 }
 
 int mapPairContainsRanges(uint64_t mins, uint64_t maxs) {
@@ -595,13 +599,30 @@ int getDistThreshold(int remainingLayers) {
     return ((remainingLayers * 3 - 1) >> 1) + 1;
 }
 
+/* test to see if this map falls under a solution
+ */
+int testMap(uint64_t map) {
+    __m128i xmm = uintToXmm(map);
+    return _mm_testz_si128(_mm_or_si128(
+                _mm_cmpgt_epi8(_mm256_castsi256_si128(goalMin), xmm),
+                _mm_cmpgt_epi8(xmm, _mm256_castsi256_si128(goalMax))
+                ), uintMax128);
+}
+
 branch_layer_t potentialLayers[800*32];
 
 //main dfs recursive search function
 int dfs(uint64_t input, int depth, int prevLayerConf) {
+    // test to see if we found a solution, even if we're not at the end. this
+    // can happen even though it seems like it shouldn't
+    if (testMap(input)) {
+        currLayer = depth + 1;
+        if (_outputChain != 0) _outputChain[depth] = layerConf[prevLayerConf];
+        return 1;
+    }
+
     if(depth == currLayer - 1) return fastLastLayerSearch(input, prevLayerConf, solveType);
     iter += nextValidLayersSize[prevLayerConf];
-
     int totalNextLayersIdentified = batchApplyAndCheckExact(
             input,
             nextValidLayerLuts + prevLayerConf*800,
@@ -722,10 +743,7 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
         return requestedMaxDepth + 1;
     }
 
-    // test specifically for identity and K0, as those do not show up in the search
-    if (_mm256_testz_si256(_mm256_or_si256(_mm256_cmpgt_epi8(goalMin, idenityPermutation), _mm256_cmpgt_epi8(idenityPermutation, goalMax)), uintMax256)) {
-        return 0;
-    }
+
     if (request.mins == 0) {
         if (outputChain) outputChain[0] = 0x2f0;
         return 1;
@@ -814,5 +832,106 @@ void printHlpRequest(hlp_request_t request) {
         printf("[%X-%X]", minVal, maxVal);
     }
 }
+
+
+void hlpPrintSearch(char* map) {
+    uint16_t result[32];
+    hlp_request_t request = parseHlpRequestStr(map);
+    switch (request.error) {
+        case HLP_ERROR_NULL:
+        case HLP_ERROR_BLANK:
+            printf("Error: must provide a function to solve for\n");
+            return;
+        case HLP_ERROR_TOO_LONG:
+            printf("Error: too many values are provided\n");
+            return;
+        case HLP_ERROR_MALFORMED:
+            printf("Error: malformed expression\n");
+            return;
+    }
+
+    if (hlpSolveVerbosity > 0) {
+        printf("searching for ");
+        printHlpRequest(request);
+        printf("\n");
+    }
+
+    int length = solve(request, result, globalMaxDepth, globalAccuracy);
+
+    if (length > globalMaxDepth) {
+        if (hlpSolveVerbosity > 0)
+            printf("no result found\n");
+    } else {
+        if (hlpSolveVerbosity > 0) {
+            printf("result found, length %d", length);
+            if (request.solveType != HLP_SOLVE_TYPE_EXACT) {
+                printf(" (");
+                printHlpMap(applyChain(hlpStartPos, result, length));
+                printf(")");
+            }
+            printf(":  ");
+        }
+        printChain(result, length);
+        printf("\n");
+    }
+}
+
+enum LONG_OPTIONS {
+    LONG_OPTION_MAX_DEPTH = 1000,
+    LONG_OPTION_ACCURACY,
+    LONG_OPTION_CACHE_SIZE
+};
+
+static const char doc[] =
+"Find a solution to the vanilla hex layer problem"
+;
+
+static const struct argp_option options[] = {
+    { "fast", 'f', 0, 0, "Equivilant to --accuracy -1" },
+    { "perfect", 'p', 0, 0, "Equivilant to --accuracy 2" },
+    { "max-length", LONG_OPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
+    { "accuracy", LONG_OPTION_ACCURACY, "LEVEL", 0, "Set search accuracy from -1 to 2, 0 being normal, 2 being perfect" },
+    { "cache", LONG_OPTION_CACHE_SIZE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
+    { 0 }
+};
+
+static error_t parse_opt(int key, char* arg, struct argp_state *state) {
+    struct arg_settings_solver_hex* settings = state->input;
+    switch (key) {
+        case LONG_OPTION_ACCURACY:
+            int level = atoi(arg);
+            if (level < -1 || level > 2)
+                argp_error(state, "%s is not a valid accuracy", arg);
+            else
+                globalAccuracy = level;
+            break;
+        case 'f':
+            return parse_opt(LONG_OPTION_ACCURACY, "-1", state);
+        case 'p':
+            return parse_opt(LONG_OPTION_ACCURACY, "2", state);
+        case LONG_OPTION_MAX_DEPTH:
+            globalMaxDepth = atoi(arg);
+            break;
+        case LONG_OPTION_CACHE_SIZE:
+            hlpSetCacheSize(atoi(arg) - 4);
+            break;
+        case ARGP_KEY_INIT:
+            globalAccuracy = ACCURACY_NORMAL;
+            globalMaxDepth = 31;
+            break;
+        case ARGP_KEY_SUCCESS:
+            hlpSolveVerbosity = settings->global->verbosity;
+            break;
+    }
+    return 0;
+}
+
+struct argp argp_solver_hex = {
+    options,
+    parse_opt,
+    "FUNCTION",
+    doc
+};
+
 
 //#pragma GCC pop_options

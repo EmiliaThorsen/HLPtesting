@@ -2,14 +2,9 @@
 #define BITONIC_SORT_H
 #include <stdint.h>
 #include <immintrin.h>
+#include "vector_tools.h"
 
-typedef struct ymm_pair_s {
-    __m256i ymm0;
-    __m256i ymm1;
-} ymm_pair_t;
-
-
-extern const __m256i bitonicSortByteSwap, bitonicSortWordReverse1x8, bitonicSortWordReverse2x4, bitonicSortWordReverse4x2, bitonicSortInitialZip, bitonicSortInitialZip2, lowBytesMask256;
+extern const __m256i bitonicSortByteSwap, bitonicSortWordReverse1x8, bitonicSortWordReverse2x4, bitonicSortWordReverse4x2;
 
 inline ymm_pair_t bitonic_sort4x16x8_blend_w(ymm_pair_t pair) {
     ymm_pair_t newpair = {_mm256_blend_epi16(pair.ymm0, pair.ymm1, 0b10101010),
@@ -79,7 +74,7 @@ inline ymm_pair_t bitonic_sort4x16x8_inner(ymm_pair_t pair) {
 
     // pack bytes
     ymm_pair_t newpair = {_mm256_packus_epi16(_mm256_srli_epi16(pair.ymm0, 8), _mm256_srli_epi16(pair.ymm1, 8)),
-        _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, lowBytesMask256), _mm256_and_si256(pair.ymm1, lowBytesMask256))};
+        _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, low_bytes_mask256), _mm256_and_si256(pair.ymm1, low_bytes_mask256))};
     return newpair;
 }
 

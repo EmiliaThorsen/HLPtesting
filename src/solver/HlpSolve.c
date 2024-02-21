@@ -4,12 +4,12 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
-#include <emmintrin.h>
-/* #include <intrin.h> */
+#include <immintrin.h>
 #include "../aa_tree.h"
 #include "HlpSolve.h"
 #include <stdbool.h>
 #include "../bitonicSort.h"
+#include "../vector_tools.h"
 
 //#pragma GCC push_options
 //#pragma GCC optimize ("O0")
@@ -22,11 +22,7 @@ typedef struct branch_layer_s {
 
 int solveType;
 
-const uint64_t hlpStartPos = 0x0123456789abcdef;
-const uint64_t startPos = 0x7f6e5d4c3b2a1908;
-const uint64_t broadcastH16 = 0x1111111111111111;
 int cacheSize = 22;
-
 
 __m256i goalMin;
 __m256i goalMax;
@@ -37,7 +33,6 @@ uint16_t* nextValidLayers;
 uint64_t* nextValidLayerLuts;
 int* nextValidLayersSize;
 int hlpSolveVerbosity = 1;
-
 
 uint16_t* layerConfAll[16] = {0};
 uint16_t* nextValidLayersAll[16] = {0};
@@ -64,23 +59,6 @@ clock_t programStartT;
 int globalMaxDepth;
 int globalAccuracy;
 
-const uint64_t lowHalvesMask64 = 0x0f0f0f0f0f0f0f0f;
-const __m128i lowHalvesMask128 = {lowHalvesMask64, lowHalvesMask64};
-const __m256i lowHalvesMask256 = {lowHalvesMask64, lowHalvesMask64, lowHalvesMask64, lowHalvesMask64};
-
-__m256i lowHalvesMask256_2() {
-    // todo: find a way to do this that gcc doesn't deoptimize
-    __m256i ones;
-    ones = _mm256_cmpeq_epi32(ones, ones);
-    ones = _mm256_srli_epi16(ones, 12);
-    ones = _mm256_packus_epi16(ones, ones);
-    return ones;
-}
-
-const __m128i fixUintPerm = {0x0c040d050e060f07, 0x080009010a020b03};
-const __m256i idenityPermutation = {0x0706050403020100, 0x0f0e0d0c0b0a0908, 0x0706050403020100, 0x0f0e0d0c0b0a0908};
-const __m128i uintMax128 = {-1, -1};
-const __m256i uintMax256 = {-1, -1, -1, -1};
 
 int isHex(char c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
@@ -163,24 +141,6 @@ hlp_request_t parseHlpRequestStr(char* str) {
     return result;
 }
 
-__m128i uintToXmm(uint64_t uint) {
-    __m128i input = _mm_cvtsi64_si128(uint);
-    return _mm_and_si128(_mm_or_si128(_mm_slli_si128(input, 8), _mm_srli_epi64(input, 4)), lowHalvesMask128);
-}
-
-uint64_t xmmToUint(__m128i xmm) {
-    return _mm_cvtsi128_si64(_mm_or_si128(_mm_slli_epi32(xmm, 4), _mm_srli_si128(xmm, 8)));
-}
-
-// converts a "nice" uint64 into one that works properly for applying precomputed maps
-__m128i prettyUintToXmm(uint64_t uint) {
-    return _mm_shuffle_epi8(uintToXmm(uint), fixUintPerm);
-}
-
-// assumes both are in the "fixed" format
-uint64_t apply_mapping(uint64_t input, uint64_t map) {
-    return xmmToUint(_mm_shuffle_epi8(uintToXmm(map), uintToXmm(input)));
-}
 
 uint64_t layer(uint64_t start, uint16_t config) {
     // adjust mode if rotated
@@ -188,14 +148,14 @@ uint64_t layer(uint64_t start, uint16_t config) {
     config += (config & 0x400) >> 2;
 
     // unpack map and config
-    __m128i input = uintToXmm(start);
+    __m128i input = unpack_uint_to_xmm(start);
     __m128i back1 = input;
     __m128i side2 = input;
 
     __m128i v_config = _mm_cvtsi32_si128(config);
     __m128i back2 = _mm_broadcastb_epi8(v_config);
-    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), lowHalvesMask128);
-    back2 = _mm_and_si128(back2, lowHalvesMask128);
+    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), low_halves_mask128);
+    back2 = _mm_and_si128(back2, low_halves_mask128);
 
     // shift left then arith right so bit we shift to msb gets cast to whole register
     v_config = _mm_shuffle_epi32(v_config, 0);
@@ -214,34 +174,7 @@ uint64_t layer(uint64_t start, uint16_t config) {
     __m128i output = _mm_max_epi8(output1, output2);
 
     // pack back into uint
-    return xmmToUint(output);
-}
-
-ymm_pair_t quadUnpackMap(__m256i packed) {
-    const __m256i upackShifts = {4, 0, 4, 0};
-    ymm_pair_t pair = {
-        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0x44), upackShifts), lowHalvesMask256),
-        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0xee), upackShifts), lowHalvesMask256)};
-    return pair;
-}
-
-__m256i quadPackMap(ymm_pair_t unpacked) {
-    return _mm256_blend_epi32(
-            _mm256_or_si256(_mm256_srli_si256(unpacked.ymm0, 8), _mm256_slli_epi64(unpacked.ymm0, 4)),
-            _mm256_or_si256(unpacked.ymm1, _mm256_slli_epi64(_mm256_slli_si256(unpacked.ymm1, 8), 4)),
-            0b11001100
-            );
-}
-
-inline __m256i quickGetTestMask() {
-    __m128i dummy;
-    // fortunately, gcc somehow does not deoptimize this
-    return _mm256_castsi128_si256(_mm_cmpeq_epi64(dummy, dummy));
-}
-
-inline __m256i quickGetLow15Mask() {
-    __m256i ymm = {-1,-1,-1,-1};
-    return _mm256_srli_si256(ymm, 1);
+    return pack_xmm_to_uint(output);
 }
 
 inline ymm_pair_t combineRangesInner(__m256i equalityReference, ymm_pair_t mins, int shift) {
@@ -262,7 +195,7 @@ inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMax
     // we invert the max values so that after shifting things, any zeros
     // shifted in will not affect anything, as we only combine things with max
     // function
-    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uintMax256);
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
 
     minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 1);
     minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 2);
@@ -274,21 +207,19 @@ inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMax
     minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -4);
     minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -8);
 
-    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uintMax256);
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
 }
 
 inline int getLegalDistCheckMaskRanged(__m256i sortedYmm, int threshhold) {
-    const __m256i splitTestMask = quickGetTestMask();
-    const __m256i low15Mask = quickGetLow15Mask();
-    __m256i finalIndices = _mm256_and_si256(sortedYmm, lowHalvesMask256);
-    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), lowHalvesMask256);
+    __m256i finalIndices = _mm256_and_si256(sortedYmm, low_halves_mask256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
     ymm_pair_t final = {_mm256_shuffle_epi8(goalMin, finalIndices), _mm256_shuffle_epi8(goalMax, finalIndices)};
     final = combineRanges(current, final);
 
     // if the min is higher than the max, that's all we need to know
     __m256i illegals = _mm256_cmpgt_epi8(final.ymm0, final.ymm1);
     int mask = -1;
-    mask &= _mm256_testz_si256(splitTestMask, illegals) | (_mm256_testc_si256(splitTestMask, illegals) << 2);
+    mask &= _mm256_testz_si256(split_test_mask256, illegals) | (_mm256_testc_si256(split_test_mask256, illegals) << 2);
 
     __m256i finalDelta = _mm256_max_epi8(
             _mm256_sub_epi8(final.ymm0, _mm256_srli_si256(final.ymm1, 1)),
@@ -302,18 +233,16 @@ inline int getLegalDistCheckMaskRanged(__m256i sortedYmm, int threshhold) {
 }
 
 inline int getLegalDistCheckMaskPartial(__m256i sortedYmm, int threshhold) {
-    const __m256i splitTestMask = quickGetTestMask();
-    const __m256i low15Mask = quickGetLow15Mask();
-    __m256i final = _mm256_and_si256(sortedYmm, lowHalvesMask256);
-    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), lowHalvesMask256);
+    __m256i final = _mm256_and_si256(sortedYmm, low_halves_mask256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
 
     __m256i finalDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(final, 1), final));
     __m256i currentDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(current, 1), current));
 
     __m256i illegals = _mm256_and_si256(_mm256_cmpeq_epi8(currentDelta, _mm256_setzero_si256()), finalDelta);
-    illegals = _mm256_and_si256(illegals, low15Mask);
+    illegals = _mm256_and_si256(illegals, low_halves_mask256);
     int mask = -1;
-    mask &= _mm256_testz_si256(splitTestMask, illegals) | (_mm256_testc_si256(splitTestMask, illegals) << 2);
+    mask &= _mm256_testz_si256(split_test_mask256, illegals) | (_mm256_testc_si256(split_test_mask256, illegals) << 2);
 
     uint32_t separationsMask = _mm256_movemask_epi8(_mm256_cmpgt_epi8(finalDelta, currentDelta)) & 0x7fff7fff;
     mask &= (_popcnt32(separationsMask & 0xffff) <= threshhold) | ((_popcnt32(separationsMask >> 16) <= threshhold) << 2);
@@ -327,19 +256,19 @@ int batchApplyAndCheckExact(
         int quantity,
         int threshhold,
         const int variant) {
-    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
+    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(unpack_uint_to_xmm(input)), 0x44);
 
     // this contains extra bits to overwrite the current value on dont care entries
     __m256i doubledGoal;
     if (variant == HLP_SOLVE_TYPE_RANGED) 
-        doubledGoal = idenityPermutation;
+        doubledGoal = identity_permutation256;
     else
         doubledGoal = _mm256_or_si256(goalMin, dontCareMask);
 
     branch_layer_t* currentOutput = outputs;
 
     for (int i = (quantity - 1) / 4; i >= 0; i--) {
-        ymm_pair_t quad = quadUnpackMap(_mm256_loadu_si256(((__m256i*) maps) + i));
+        ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(((__m256i*) maps) + i));
         quad.ymm0 = _mm256_shuffle_epi8(quad.ymm0, doubledInput);
         quad.ymm1 = _mm256_shuffle_epi8(quad.ymm1, doubledInput);
 
@@ -355,7 +284,7 @@ int batchApplyAndCheckExact(
         else
             mask = getLegalDistCheckMaskPartial(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskPartial(sortedQuad.ymm1, threshhold) << 1);
         if (i & (mask == 0)) continue;
-        __m256i packed = quadPackMap(quad);
+        __m256i packed = quad_pack_map256(quad);
 
         // can't just use a for loop because const variables aren't const enough
         currentOutput->configIndex = i * 4 + 3;
@@ -419,15 +348,15 @@ void precomputeLayers(int group) {
     nextValidLayersSize = malloc(800*sizeof(int));
 
     int64_t flag;
-    aatree_node* uniqueNextLayersTree = aa_tree_insert(startPos, NULL, &flag);
+    aatree_node* uniqueNextLayersTree = aa_tree_insert(identity_permutation_packed64, NULL, &flag);
     /* uint64_t* uniqueNextLayersList = calloc(800*800, sizeof(uint64_t)); */
     /* for (int i=0; i<800*800; i++) uniqueNextLayersList[i] = 0; */
 
     if (hlpSolveVerbosity >= 3) printf("starting layer precompute\n");
     for(int conf = 0; conf < 1536; conf++) {
-        uint64_t output = layer(startPos, conf);
+        uint64_t output = layer(identity_permutation_packed64, conf);
         if(getGroup(output) < group) continue;
-        if (output == startPos) continue;
+        if (output == identity_permutation_packed64) continue;
         if (aa_tree_search(uniqueNextLayersTree, output)) continue;
         uniqueNextLayersTree = aa_tree_insert(output, uniqueNextLayersTree, &flag);
         /* if (inList(output, uniqueNextLayersList, layerCount)) continue; */
@@ -445,9 +374,9 @@ void precomputeLayers(int group) {
         uint64_t layerOut = nextValidLayerLuts[799*800 + conf];
         int nextLayerSize = 0;
         for (int conf2 = 0; conf2 < layerCount; conf2++) {
-            uint64_t nextLayerOut = apply_mapping(layerOut, nextValidLayerLuts[799*800 + conf2]);
+            uint64_t nextLayerOut = apply_mapping_packed64(layerOut, nextValidLayerLuts[799*800 + conf2]);
             if(getGroup(nextLayerOut) < group) continue;
-            if (nextLayerOut == startPos) continue;
+            if (nextLayerOut == identity_permutation_packed64) continue;
 
             if (aa_tree_search(uniqueNextLayersTree, nextLayerOut)) continue;
             uniqueNextLayersTree = aa_tree_insert(nextLayerOut, uniqueNextLayersTree, &flag);
@@ -481,14 +410,13 @@ void precomputeLayers(int group) {
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
 int fastLastLayerSearch(uint64_t input, int prevLayerConf, const int variant) {
-    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(uintToXmm(input)), 0x44);
+    __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(unpack_uint_to_xmm(input)), 0x44);
 
     __m256i* quadMaps = (__m256i*) (nextValidLayerLuts + 800*prevLayerConf);
 
     iter += nextValidLayersSize[prevLayerConf];
-    const __m256i splitTestMask = quickGetTestMask();
     for (int i = (nextValidLayersSize[prevLayerConf] - 1) / 4; i >= 0; i--) {
-        ymm_pair_t quad = quadUnpackMap(_mm256_loadu_si256(quadMaps + i));
+        ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(quadMaps + i));
 
         // determine if there are any spots that do not match up
         // if all zeros, that means they match
@@ -500,13 +428,13 @@ int fastLastLayerSearch(uint64_t input, int prevLayerConf, const int variant) {
         quad.ymm0 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm0), _mm256_cmpgt_epi8(quad.ymm0, goalMax));
         quad.ymm1 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm1), _mm256_cmpgt_epi8(quad.ymm1, goalMax));
         // no need to apply dontCareMask, they already will always succeed anyways
-        if (i && _mm256_testnzc_si256(splitTestMask, quad.ymm0) && _mm256_testnzc_si256(splitTestMask, quad.ymm1)) continue;
+        if (i && _mm256_testnzc_si256(split_test_mask256, quad.ymm0) && _mm256_testnzc_si256(split_test_mask256, quad.ymm1)) continue;
 
         bool successes[] = {
-            _mm256_testz_si256(splitTestMask, quad.ymm0),
-            _mm256_testz_si256(splitTestMask, quad.ymm1),
-            _mm256_testc_si256(splitTestMask, quad.ymm0),
-            _mm256_testc_si256(splitTestMask, quad.ymm1)};
+            _mm256_testz_si256(split_test_mask256, quad.ymm0),
+            _mm256_testz_si256(split_test_mask256, quad.ymm1),
+            _mm256_testc_si256(split_test_mask256, quad.ymm0),
+            _mm256_testc_si256(split_test_mask256, quad.ymm1)};
 
         for (int j=0; j<4; j++) {
             if (!successes[j]) continue;
@@ -602,11 +530,11 @@ int getDistThreshold(int remainingLayers) {
 /* test to see if this map falls under a solution
  */
 int testMap(uint64_t map) {
-    __m128i xmm = uintToXmm(map);
+    __m128i xmm = unpack_uint_to_xmm(map);
     return _mm_testz_si128(_mm_or_si128(
                 _mm_cmpgt_epi8(_mm256_castsi256_si128(goalMin), xmm),
                 _mm_cmpgt_epi8(xmm, _mm256_castsi256_si128(goalMax))
-                ), uintMax128);
+                ), uint_max128);
 }
 
 branch_layer_t potentialLayers[800*32];
@@ -680,12 +608,12 @@ int init(hlp_request_t request) {
 
     precomputeLayers(_uniqueOutputs);
     
-    goalMin = _mm256_permute4x64_epi64(_mm256_castsi128_si256(prettyUintToXmm(request.mins)), 0x44);
-    goalMax = _mm256_permute4x64_epi64(_mm256_castsi128_si256(prettyUintToXmm(request.maxs)), 0x44);
+    goalMin = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.mins)), 0x44);
+    goalMax = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.maxs)), 0x44);
 
-    dontCareMask = _mm256_cmpeq_epi8(_mm256_sub_epi8(goalMax, goalMin), lowHalvesMask256);
+    dontCareMask = _mm256_cmpeq_epi8(_mm256_sub_epi8(goalMax, goalMin), low_halves_mask256);
     dontCareCount = _popcnt32(_mm_movemask_epi8(_mm256_castsi256_si128(dontCareMask)));
-    dontCarePostSortPerm = _mm256_min_epi8(idenityPermutation, _mm256_set1_epi8(15 - dontCareCount));
+    dontCarePostSortPerm = _mm256_min_epi8(identity_permutation256, _mm256_set1_epi8(15 - dontCareCount));
 
     return 0;
 }
@@ -695,7 +623,7 @@ int singleSearchInner(int maxDepth) {
     currLayer = 1;
 
     while (currLayer <= maxDepth) {
-        if(dfs(startPos, 0, 799)) {
+        if(dfs(identity_permutation_packed64, 0, 799)) {
             if (hlpSolveVerbosity >= 3) {
                 printf("solution found at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
                 printf("total iter over all: %'ld\n", iter);
@@ -866,7 +794,7 @@ void hlpPrintSearch(char* map) {
             printf("result found, length %d", length);
             if (request.solveType != HLP_SOLVE_TYPE_EXACT) {
                 printf(" (");
-                printHlpMap(applyChain(hlpStartPos, result, length));
+                printHlpMap(applyChain(identity_permutation_big_endian64, result, length));
                 printf(")");
             }
             printf(":  ");
@@ -881,10 +809,6 @@ enum LONG_OPTIONS {
     LONG_OPTION_ACCURACY,
     LONG_OPTION_CACHE_SIZE
 };
-
-static const char doc[] =
-"Find a solution to the vanilla hex layer problem"
-;
 
 static const struct argp_option options[] = {
     { "fast", 'f', 0, 0, "Equivilant to --accuracy -1" },
@@ -928,9 +852,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
 
 struct argp argp_solver_hex = {
     options,
-    parse_opt,
-    "FUNCTION",
-    doc
+    parse_opt
 };
 
 

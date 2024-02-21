@@ -8,6 +8,7 @@ hlpt_SOURCES += ./src/bitonicSort.c
 hlpt_SOURCES += ./src/command/hex.c
 hlpt_SOURCES += ./src/search/hlp_random.c
 hlpt_SOURCES += ./src/solver/HlpSolve.c
+hlpt_SOURCES += ./src/vector_tools.c
 hlpt_SOURCES += 
 
 EXTRA_DIST = m4/gnulib-cache.m4

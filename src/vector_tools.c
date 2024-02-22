@@ -19,6 +19,10 @@ const __m256i high_bytes_mask256 = {high_bytes_mask64, high_bytes_mask64, high_b
 const __m128i uint_max128 = {-1, -1};
 const __m256i uint_max256 = {-1, -1, -1, -1};
 
+const uint64_t low_15_bytes_mask64 = UINT64_MAX >> 8;
+const __m128i low_15_bytes_mask128 = { low_15_bytes_mask64, low_15_bytes_mask64 };
+const __m256i low_15_bytes_mask256 = { low_15_bytes_mask64, low_15_bytes_mask64, low_15_bytes_mask64, low_15_bytes_mask64 };
+
 const uint64_t identity_permutation_big_endian64 = 0x0123456789abcdef;
 const uint64_t identity_permutation_packed64 = 0x7f6e5d4c3b2a1908;
 const uint64_t identity_permutation_little_endian64 = 0xfedcba9876543210;
@@ -47,15 +51,14 @@ uint64_t pack_xmm_to_uint(__m128i xmm) {
 __m128i little_endian_uint_to_xmm(uint64_t uint) {
     __m128i input = _mm_cvtsi64_si128(uint);
     return _mm_unpacklo_epi8(
-            _mm_and_si128(low_halves_mask128, low_halves_mask128),
+            _mm_and_si128(input, low_halves_mask128),
             _mm_and_si128(_mm_srli_epi64(input, 4), low_halves_mask128)
             );
 }
 
 uint64_t little_endian_xmm_to_uint(__m128i xmm) {
-    __m128i lows = _mm_and_si128(xmm, low_bytes_mask128);
-    __m128i highs = _mm_srli_epi16(xmm, 12);
-    return _mm_cvtsi128_si64(_mm_packus_epi16(lows, highs));
+    __m128i merged = _mm_or_si128(_mm_and_si128(xmm, low_bytes_mask128), _mm_srli_epi16(xmm, 4));
+    return _mm_cvtsi128_si64(_mm_packus_epi16(merged, _mm_setzero_si128()));
 }
 
 __m128i big_endian_uint_to_xmm(uint64_t uint) {

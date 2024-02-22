@@ -240,7 +240,7 @@ inline int getLegalDistCheckMaskPartial(__m256i sortedYmm, int threshhold) {
     __m256i currentDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(current, 1), current));
 
     __m256i illegals = _mm256_and_si256(_mm256_cmpeq_epi8(currentDelta, _mm256_setzero_si256()), finalDelta);
-    illegals = _mm256_and_si256(illegals, low_halves_mask256);
+    illegals = _mm256_and_si256(illegals, low_15_bytes_mask256);
     int mask = -1;
     mask &= _mm256_testz_si256(split_test_mask256, illegals) | (_mm256_testc_si256(split_test_mask256, illegals) << 2);
 
@@ -792,7 +792,7 @@ void hlpPrintSearch(char* map) {
     } else {
         if (hlpSolveVerbosity > 0) {
             printf("result found, length %d", length);
-            if (request.solveType != HLP_SOLVE_TYPE_EXACT) {
+            if (hlpSolveVerbosity > 2 || request.solveType != HLP_SOLVE_TYPE_EXACT) {
                 printf(" (");
                 printHlpMap(applyChain(identity_permutation_big_endian64, result, length));
                 printf(")");

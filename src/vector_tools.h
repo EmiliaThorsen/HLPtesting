@@ -27,6 +27,10 @@ extern const __m256i high_bytes_mask256;
 extern const __m128i uint_max128;
 extern const __m256i uint_max256;
 
+extern const uint64_t low_15_bytes_mask64;
+extern const __m128i low_15_bytes_mask128;
+extern const __m256i low_15_bytes_mask256;
+
 extern const uint64_t identity_permutation_big_endian64;
 extern const uint64_t identity_permutation_packed64;
 extern const uint64_t identity_permutation_little_endian64;

@@ -89,3 +89,14 @@ uint64_t apply_mapping_packed64(uint64_t first, uint64_t second) {
     return pack_xmm_to_uint(_mm_shuffle_epi8(unpack_uint_to_xmm(second), unpack_uint_to_xmm(first)));
 }
 
+//counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
+int get_group64(uint64_t x) {
+    uint16_t bit_feild = 0;
+    for(int i = 0; i < 16; i++) {
+        int ss = (x >> (i * 4)) & 15;
+        bit_feild |= 1 << ss;
+    }
+    return _popcnt32(bit_feild);
+}
+
+

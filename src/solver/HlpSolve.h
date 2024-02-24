@@ -1,6 +1,7 @@
 #ifndef HLP_SOLVE
 #define HLP_SOLVE
 #include "../arg_global.h"
+#include "../redstone.h"
 #include <stdint.h>
 
 enum SearchAccuracy { ACCURACY_REDUCED=-1, ACCURACY_NORMAL, ACCURACY_INCREASED, ACCURACY_PERFECT };
@@ -20,15 +21,6 @@ extern const uint64_t hlpStartPos;
 extern const uint64_t broadcastH16; // 0x1111...
 
 extern int hlpSolveVerbosity;
-
-/* apply a layer to the map
- * config: 00000mmmaaaabbbb
- *      mmm: mode; 0 = c/c, 1 = c/s, 2 = s/c, 3 = s/s, 4 = rotated c/s
- *      aaaa: first barrel value (the one for the comparator that points
- *      directly into another comparator)
- *      bbbb: second barrel value
- */
-extern uint64_t layer(uint64_t map, uint16_t config);
 
 /* search for a solution for the given map
  * returns length of chain
@@ -62,7 +54,7 @@ void printChain(uint16_t* chain, int length);
 
 struct arg_settings_solver_hex {
     struct arg_settings_global* global;
-    int value;
+    struct arg_settings_redstone settings_redstone;
 };
 
 extern struct argp argp_solver_hex;

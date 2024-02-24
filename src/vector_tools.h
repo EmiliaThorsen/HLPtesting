@@ -57,4 +57,6 @@ __m256i quad_pack_map256(ymm_pair_t unpacked);
 
 uint64_t apply_mapping_packed64(uint64_t first, uint64_t second);
 
+int get_group64(uint64_t x);
+
 #endif

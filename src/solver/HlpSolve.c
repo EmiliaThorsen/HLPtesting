@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "../bitonicSort.h"
 #include "../vector_tools.h"
+#include "../redstone.h"
 
 //#pragma GCC push_options
 //#pragma GCC optimize ("O0")
@@ -27,26 +28,11 @@ int cacheSize = 22;
 __m256i goalMin;
 __m256i goalMax;
 
-//precomputed layer lookup tables
-uint16_t* layerConf;
-uint16_t* nextValidLayers;
-uint64_t* nextValidLayerLuts;
-int* nextValidLayersSize;
 int hlpSolveVerbosity = 1;
-
-uint16_t* layerConfAll[16] = {0};
-uint16_t* nextValidLayersAll[16] = {0};
-uint64_t* nextValidLayerLutsAll[16] = {0};
-int* nextValidLayersSizeAll[16] = {0};
-uint16_t layerPrecomputesFinished = 0;
 
 __m256i dontCareMask;
 __m256i dontCarePostSortPerm;
 int dontCareCount;
-
-uint16_t getLayerConf(int group, int layerId) { return layerConfAll[group - 1][layerId];}
-uint16_t getNextValidLayerId(int group, int prevLayerId, int index) { return nextValidLayersAll[group - 1][800 * prevLayerId + index]; }
-uint16_t getNextValidLayerSize(int group, int layerId) { return nextValidLayersSizeAll[group - 1][layerId]; }
 
 long iter;
 int currLayer;
@@ -141,41 +127,6 @@ hlp_request_t parseHlpRequestStr(char* str) {
     return result;
 }
 
-
-uint64_t layer(uint64_t start, uint16_t config) {
-    // adjust mode if rotated
-    // this makes it so the three bits in upper byte of config are independent
-    config += (config & 0x400) >> 2;
-
-    // unpack map and config
-    __m128i input = unpack_uint_to_xmm(start);
-    __m128i back1 = input;
-    __m128i side2 = input;
-
-    __m128i v_config = _mm_cvtsi32_si128(config);
-    __m128i back2 = _mm_broadcastb_epi8(v_config);
-    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), low_halves_mask128);
-    back2 = _mm_and_si128(back2, low_halves_mask128);
-
-    // shift left then arith right so bit we shift to msb gets cast to whole register
-    v_config = _mm_shuffle_epi32(v_config, 0);
-    __m128i mode2 = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 0), 31);
-    __m128i mode1 = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 1), 31);
-    __m128i rotate = _mm_srai_epi32(_mm_slli_epi32(v_config, 31 - 8 - 2), 31);
-
-    // use xor to conditionally swap back1 and side1
-    rotate = _mm_and_si128(rotate, _mm_xor_si128(side1, back1));
-    back1 = _mm_xor_si128(back1, rotate);
-    side1 = _mm_xor_si128(side1, rotate);
-
-    // apply the comparators
-    __m128i output1 = _mm_andnot_si128(_mm_cmpgt_epi8(side1, back1), _mm_sub_epi8(back1, _mm_and_si128(side1, mode1)));
-    __m128i output2 = _mm_andnot_si128(_mm_cmpgt_epi8(side2, back2), _mm_sub_epi8(back2, _mm_and_si128(side2, mode2)));
-    __m128i output = _mm_max_epi8(output1, output2);
-
-    // pack back into uint
-    return pack_xmm_to_uint(output);
-}
 
 inline ymm_pair_t combineRangesInner(__m256i equalityReference, ymm_pair_t mins, int shift) {
     if (shift > 0) {
@@ -307,16 +258,6 @@ int batchApplyAndCheckExact(
     return currentOutput - outputs;
 }
 
-//counts uniqe values, usefull for generalizable prune of layers that reduce too much from the get go
-int getGroup(uint64_t x) {
-    uint16_t bitFeild = 0;
-    for(int i = 0; i < 16; i++) {
-        int ss = (x >> (i * 4)) & 15;
-        bitFeild |= 1 << ss;
-    }
-    return _popcnt32(bitFeild);
-}
-
 int getMinGroup(uint64_t mins, uint64_t maxs) {
     // not great but works for now
     uint16_t bitFeild = 0;
@@ -331,91 +272,14 @@ int getMinGroup(uint64_t mins, uint64_t maxs) {
     return result;
 }
 
-//precompute of layers into lut, proceding layers deduplicated for lower branching, and distance estimate table
-void precomputeLayers(int group) {
-    if ((layerPrecomputesFinished >> (group - 1)) & 1) {
-        layerConf = layerConfAll[group-1];
-        nextValidLayers = nextValidLayersAll[group-1];
-        nextValidLayerLuts = nextValidLayerLutsAll[group-1];
-        nextValidLayersSize = nextValidLayersSizeAll[group-1];
-        return;
-    }
-
-    int layerCount = 0;
-    layerConf = malloc(800*sizeof(uint16_t));
-    nextValidLayers = malloc(800*800*sizeof(uint16_t));
-    nextValidLayerLuts = calloc(800*800, sizeof(uint64_t));
-    nextValidLayersSize = malloc(800*sizeof(int));
-
-    int64_t flag;
-    aatree_node* uniqueNextLayersTree = aa_tree_insert(identity_permutation_packed64, NULL, &flag);
-    /* uint64_t* uniqueNextLayersList = calloc(800*800, sizeof(uint64_t)); */
-    /* for (int i=0; i<800*800; i++) uniqueNextLayersList[i] = 0; */
-
-    if (hlpSolveVerbosity >= 3) printf("starting layer precompute\n");
-    for(int conf = 0; conf < 1536; conf++) {
-        uint64_t output = layer(identity_permutation_packed64, conf);
-        if(getGroup(output) < group) continue;
-        if (output == identity_permutation_packed64) continue;
-        if (aa_tree_search(uniqueNextLayersTree, output)) continue;
-        uniqueNextLayersTree = aa_tree_insert(output, uniqueNextLayersTree, &flag);
-        /* if (inList(output, uniqueNextLayersList, layerCount)) continue; */
-        /* uniqueNextLayersList[layerCount] = output; */
-
-        layerConf[layerCount] = conf;
-        nextValidLayers[799 * 800 + layerCount] = layerCount;
-        nextValidLayerLuts[799 * 800 + layerCount] = output;
-        layerCount++;
-    }
-    nextValidLayersSize[799] = layerCount;
-    long totalNext = layerCount;
-    if (hlpSolveVerbosity >= 3) printf("starting next layer precompute\n");
-    for(int conf = 0; conf < layerCount; conf++) {
-        uint64_t layerOut = nextValidLayerLuts[799*800 + conf];
-        int nextLayerSize = 0;
-        for (int conf2 = 0; conf2 < layerCount; conf2++) {
-            uint64_t nextLayerOut = apply_mapping_packed64(layerOut, nextValidLayerLuts[799*800 + conf2]);
-            if(getGroup(nextLayerOut) < group) continue;
-            if (nextLayerOut == identity_permutation_packed64) continue;
-
-            if (aa_tree_search(uniqueNextLayersTree, nextLayerOut)) continue;
-            uniqueNextLayersTree = aa_tree_insert(nextLayerOut, uniqueNextLayersTree, &flag);
-            /* if (inList(nextLayerOut, uniqueNextLayersList, totalNext)) continue; */
-            /* uniqueNextLayersList[totalNext] = nextLayerOut; */
-
-            nextValidLayers[conf * 800 + nextLayerSize] = conf2;
-            nextValidLayerLuts[conf * 800 + nextLayerSize] = nextValidLayerLuts[799*800 + conf2];
-            totalNext++;
-            nextLayerSize++;
-        }
-        for (int i=0; i<4; i++)
-            nextValidLayerLuts[conf*800 + nextLayerSize + i] = 0;
-        nextValidLayersSize[conf] = nextLayerSize;
-    }
-
-    aa_tree_free(uniqueNextLayersTree);
-    /* free(uniqueNextLayersList); */
-
-    layerConfAll[group-1] = layerConf;
-    nextValidLayersAll[group-1] = nextValidLayers;
-    nextValidLayerLutsAll[group-1] = nextValidLayerLuts;
-    nextValidLayersSizeAll[group-1] = nextValidLayersSize;
-    layerPrecomputesFinished |= 1 << (group -1);
-
-    if (hlpSolveVerbosity < 3) return;
-
-    printf("layer precompute done at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
-    printf("layers computed:%d, total next layers:%'ld\n", layerCount, totalNext - layerCount);
-}
-
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
-int fastLastLayerSearch(uint64_t input, int prevLayerConf, const int variant) {
+int fastLastLayerSearch(uint64_t input, struct precomputed_hex_layer* layer, const int variant) {
     __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(unpack_uint_to_xmm(input)), 0x44);
 
-    __m256i* quadMaps = (__m256i*) (nextValidLayerLuts + 800*prevLayerConf);
+    __m256i* quadMaps = (__m256i*) (layer->next_layer_luts);
 
-    iter += nextValidLayersSize[prevLayerConf];
-    for (int i = (nextValidLayersSize[prevLayerConf] - 1) / 4; i >= 0; i--) {
+    iter += layer->next_layer_count;
+    for (int i = (layer->next_layer_count - 1) / 4; i >= 0; i--) {
         ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(quadMaps + i));
 
         // determine if there are any spots that do not match up
@@ -440,7 +304,7 @@ int fastLastLayerSearch(uint64_t input, int prevLayerConf, const int variant) {
             if (!successes[j]) continue;
             int index = i * 4 + j;
             iter -= index;
-            uint16_t config = layerConf[nextValidLayers[prevLayerConf * 800 + index]];
+            uint16_t config = layer->next_layers[index]->config;
             if (_solutionsFound != -1) {
                 _solutionsFound++;
                 continue;
@@ -507,13 +371,6 @@ void invalidateCache() {
     }
 }
 
-/*
-int cmpfunc (const void * a, const void * b) {
-   return ( ((branch_layer_t*)a)->separations - ((branch_layer_t*)b)->separations );
-}*/
-
-
-
 // the most number of separations that can be found in the distance check before it prunes
 int getDistThreshold(int remainingLayers) {
     if (_searchAccuracy == ACCURACY_REDUCED) return remainingLayers - (remainingLayers > 2);
@@ -540,47 +397,45 @@ int testMap(uint64_t map) {
 branch_layer_t potentialLayers[800*32];
 
 //main dfs recursive search function
-int dfs(uint64_t input, int depth, int prevLayerConf) {
+int dfs(uint64_t input, int depth, struct precomputed_hex_layer* layer) {
     // test to see if we found a solution, even if we're not at the end. this
     // can happen even though it seems like it shouldn't
     if (testMap(input)) {
         currLayer = depth + 1;
-        if (_outputChain != 0) _outputChain[depth] = layerConf[prevLayerConf];
+        if (_outputChain != 0) _outputChain[depth] = layer->config;
         return 1;
     }
 
-    if(depth == currLayer - 1) return fastLastLayerSearch(input, prevLayerConf, solveType);
-    iter += nextValidLayersSize[prevLayerConf];
+    if(depth == currLayer - 1) return fastLastLayerSearch(input, layer, solveType);
+    iter += layer->next_layer_count;
     int totalNextLayersIdentified = batchApplyAndCheckExact(
             input,
-            nextValidLayerLuts + prevLayerConf*800,
+            layer->next_layer_luts,
             potentialLayers + 800*depth,
-            nextValidLayersSize[prevLayerConf],
+            layer->next_layer_count,
             getDistThreshold(currLayer - depth - 1),
             solveType
             );
 
-    // this adds a very slight boost by checking more promising branches first
-    /* if (depth < 4) */
-        /* qsort(potentialLayers + 800*depth, totalNextLayersIdentified, sizeof(branch_layer_t), cmpfunc); */
-
     for(int i = totalNextLayersIdentified - 1; i >= 0; i--) {
         branch_layer_t* entry = potentialLayers + 800*depth + i;
         int conf = entry->configIndex;
-        uint64_t output = entry->map;
-        // uint64_t output = layer(input, layerConf[nextValidLayers[prevLayerConf * 800 + conf]]);
+        struct precomputed_hex_layer* next_layer = layer->next_layers[conf];
+        /* uint64_t output = apply_mapping_packed64(input, layer->next_layer_luts[conf]); */
+        uint64_t output = apply_mapping_packed64(input, next_layer->map);
+        /* uint64_t output = entry->map; */
+        /* uint64_t output = hex_layer64(input, next_layer->config); */
 
         //cache check
         if(cacheCheck(output, depth)) continue;
 
-        int index = nextValidLayers[prevLayerConf * 800 + conf];
         //call next layers
-        if(dfs(output, depth + 1, index)) {
-            if (_outputChain != 0) _outputChain[depth] = layerConf[index];
+        if(dfs(output, depth + 1, next_layer)) {
+            if (_outputChain != 0) _outputChain[depth] = next_layer->config;
             return 1;
         }
         if (hlpSolveVerbosity < 3) continue;
-        if(depth == 0 && currLayer > 8) printf("done:%d/%d\n", conf, nextValidLayersSize[prevLayerConf]);
+        if(depth == 0 && currLayer > 8) printf("done:%d/%d\n", conf, layer->next_layer_count);
     }
     return 0;
 }
@@ -596,7 +451,7 @@ int init(hlp_request_t request) {
 
     switch (solveType) {
         case HLP_SOLVE_TYPE_EXACT:
-            _uniqueOutputs = getGroup(request.mins);
+            _uniqueOutputs = get_group64(request.mins);
             break;
         case HLP_SOLVE_TYPE_PARTIAL:
             _uniqueOutputs = getMinGroup(request.mins, request.maxs);
@@ -606,7 +461,6 @@ int init(hlp_request_t request) {
             return 1;
     }
 
-    precomputeLayers(_uniqueOutputs);
     
     goalMin = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.mins)), 0x44);
     goalMax = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.maxs)), 0x44);
@@ -619,11 +473,11 @@ int init(hlp_request_t request) {
 }
 
 //main search loop
-int singleSearchInner(int maxDepth) {
+int singleSearchInner(struct precomputed_hex_layer* base_layer, int maxDepth) {
     currLayer = 1;
 
     while (currLayer <= maxDepth) {
-        if(dfs(identity_permutation_packed64, 0, 799)) {
+        if(dfs(identity_permutation_packed64, 0, base_layer)) {
             if (hlpSolveVerbosity >= 3) {
                 printf("solution found at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
                 printf("total iter over all: %'ld\n", iter);
@@ -659,7 +513,8 @@ int singleSearch(hlp_request_t request, uint16_t* outputChain, int maxDepth, enu
     _outputChain = outputChain;
     _solutionsFound = -1;
     _searchAccuracy = accuracy;
-    return singleSearchInner(maxDepth);
+    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(_uniqueOutputs);
+    return singleSearchInner(identity_layer, maxDepth);
 }
 
 int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
@@ -671,6 +526,8 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
         return requestedMaxDepth + 1;
     }
 
+    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(_uniqueOutputs);
+    /* return requestedMaxDepth + 1; */
 
     if (request.mins == 0) {
         if (outputChain) outputChain[0] = 0x2f0;
@@ -691,7 +548,7 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
     // "real" search can cut short if it doesn't find a better solution.
     // when it's not faster, the solution is found pretty fast anyways.
     _searchAccuracy = ACCURACY_REDUCED;
-    solutionLength = singleSearchInner(solutionLength);
+    solutionLength = singleSearchInner(identity_layer, solutionLength);
 
     if (solutionLength == maxDepth) solutionLength = maxDepth;
     if (accuracy == ACCURACY_REDUCED) return solutionLength;
@@ -701,7 +558,7 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
     if (hlpSolveVerbosity >= 2) printf("starting main search\n");
 
     _searchAccuracy = accuracy;
-    int result = singleSearchInner(solutionLength - 1);
+    int result = singleSearchInner(identity_layer, solutionLength - 1);
     if (hlpSolveVerbosity >= 2) printf("total iter across searches: %'ld\n", totalIter + iter);
     if (result > maxDepth) return requestedMaxDepth + 1;
     return result;
@@ -718,7 +575,7 @@ void hlpSetCacheSize(int size) {
 
 uint64_t applyChain(uint64_t start, uint16_t* chain, int length) {
     for (int i = 0; i < length; i++) {
-        start = layer(start, chain[i]);
+        start = hex_layer64(start, chain[i]);
     }
     return start;
 }
@@ -842,6 +699,8 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
         case ARGP_KEY_INIT:
             globalAccuracy = ACCURACY_NORMAL;
             globalMaxDepth = 31;
+            settings->settings_redstone.global = settings->global;
+            state->child_inputs[0] = &settings->settings_redstone;
             break;
         case ARGP_KEY_SUCCESS:
             hlpSolveVerbosity = settings->global->verbosity;
@@ -850,9 +709,17 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
     return 0;
 }
 
+static struct argp_child argp_children[] = {
+    {&argp_redstone},
+    { 0 }
+};
+
 struct argp argp_solver_hex = {
     options,
-    parse_opt
+    parse_opt,
+    0,
+    0,
+    argp_children
 };
 
 

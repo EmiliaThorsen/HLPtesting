@@ -12,38 +12,45 @@
 #include "../vector_tools.h"
 #include "../redstone.h"
 
-//#pragma GCC push_options
-//#pragma GCC optimize ("O0")
-
-typedef struct branch_layer_s {
+struct cache_entry {
     uint64_t map;
-    uint16_t configIndex;
-    /* uint8_t separations; */
-} branch_layer_t;
+    uint32_t trial;
+    uint8_t depth;
+};
 
-int solveType;
+struct cache {
+    struct cache_entry* array;
+    uint64_t mask;
+    uint32_t global_trial;
+};
+
+struct hlp_solve_globals {
+    struct __config__ {
+        __m256i goal_min, goal_max, dont_care_mask, dont_care_post_sort_perm;
+        int solve_type, dont_care_count, current_bfs_depth, group, accuracy;
+    } config;
+
+    struct __output__ {
+        uint16_t* chain;
+        int chain_length;
+        int solutions_found;
+    } output;
+
+    struct __stats__ {
+        long total_iterations;
+        long cache_same_depth_hits, cache_dif_layer_hits, cache_misses, cache_bucket_util, cache_total_checks;
+        clock_t start_time;
+    } stats;
+
+    struct cache cache;
+};
 
 int cacheSize = 22;
 
-__m256i goalMin;
-__m256i goalMax;
 int hlpSolveVerbosity = 1;
-
-__m256i dontCareMask;
-__m256i dontCarePostSortPerm;
-int dontCareCount;
-
-long iter;
-int currLayer;
-int _uniqueOutputs;
-int _solutionsFound;
-int _searchAccuracy;
-uint16_t* _outputChain;
-clock_t programStartT;
 
 int globalMaxDepth;
 int globalAccuracy;
-
 
 int isHex(char c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
@@ -151,10 +158,10 @@ inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMax
     minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
 }
 
-inline int getLegalDistCheckMaskRanged(__m256i sortedYmm, int threshhold) {
+inline int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
     __m256i finalIndices = _mm256_and_si256(sortedYmm, low_halves_mask256);
     __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
-    ymm_pair_t final = {_mm256_shuffle_epi8(goalMin, finalIndices), _mm256_shuffle_epi8(goalMax, finalIndices)};
+    ymm_pair_t final = {_mm256_shuffle_epi8(globals->config.goal_min, finalIndices), _mm256_shuffle_epi8(globals->config.goal_max, finalIndices)};
     final = combineRanges(current, final);
 
     // if the min is higher than the max, that's all we need to know
@@ -173,7 +180,7 @@ inline int getLegalDistCheckMaskRanged(__m256i sortedYmm, int threshhold) {
     return mask;
 }
 
-inline int getLegalDistCheckMaskPartial(__m256i sortedYmm, int threshhold) {
+inline int getLegalDistCheckMaskPartial(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
     __m256i final = _mm256_and_si256(sortedYmm, low_halves_mask256);
     __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
 
@@ -191,25 +198,24 @@ inline int getLegalDistCheckMaskPartial(__m256i sortedYmm, int threshhold) {
 }
 
 int batchApplyAndCheckExact(
+        struct hlp_solve_globals* globals,
+        struct precomputed_hex_layer* layer,
+        uint16_t* outputs,
         uint64_t input,
-        uint64_t* maps,
-        branch_layer_t* outputs,
-        int quantity,
-        int threshhold,
-        const int variant) {
+        int threshhold) {
     __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(unpack_uint_to_xmm(input)), 0x44);
 
     // this contains extra bits to overwrite the current value on dont care entries
     __m256i doubledGoal;
-    if (variant == HLP_SOLVE_TYPE_RANGED) 
+    if (globals->config.solve_type == HLP_SOLVE_TYPE_RANGED) 
         doubledGoal = identity_permutation256;
     else
-        doubledGoal = _mm256_or_si256(goalMin, dontCareMask);
+        doubledGoal = _mm256_or_si256(globals->config.goal_min, globals->config.dont_care_mask);
 
-    branch_layer_t* currentOutput = outputs;
+    uint16_t* currentOutput = outputs;
 
-    for (int i = (quantity - 1) / 4; i >= 0; i--) {
-        ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(((__m256i*) maps) + i));
+    for (int i = (layer->next_layer_count - 1) / 4; i >= 0; i--) {
+        ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(((__m256i*) layer->next_layer_luts) + i));
         quad.ymm0 = _mm256_shuffle_epi8(quad.ymm0, doubledInput);
         quad.ymm1 = _mm256_shuffle_epi8(quad.ymm1, doubledInput);
 
@@ -217,32 +223,20 @@ int batchApplyAndCheckExact(
             _mm256_or_si256(doubledGoal, _mm256_slli_epi64(quad.ymm1, 4)) };
         sortedQuad = bitonic_sort4x16x8_inner(sortedQuad);
 
-        sortedQuad.ymm0 = _mm256_shuffle_epi8(sortedQuad.ymm0, dontCarePostSortPerm);
-        sortedQuad.ymm1 = _mm256_shuffle_epi8(sortedQuad.ymm1, dontCarePostSortPerm);
+        sortedQuad.ymm0 = _mm256_shuffle_epi8(sortedQuad.ymm0, globals->config.dont_care_post_sort_perm);
+        sortedQuad.ymm1 = _mm256_shuffle_epi8(sortedQuad.ymm1, globals->config.dont_care_post_sort_perm);
         int mask;
-        if (variant == HLP_SOLVE_TYPE_RANGED)
-            mask = getLegalDistCheckMaskRanged(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskRanged(sortedQuad.ymm1, threshhold) << 1);
+        if (globals->config.solve_type == HLP_SOLVE_TYPE_RANGED)
+            mask = getLegalDistCheckMaskRanged(globals, sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskRanged(globals, sortedQuad.ymm1, threshhold) << 1);
         else
-            mask = getLegalDistCheckMaskPartial(sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskPartial(sortedQuad.ymm1, threshhold) << 1);
+            mask = getLegalDistCheckMaskPartial(globals, sortedQuad.ymm0, threshhold) | (getLegalDistCheckMaskPartial(globals, sortedQuad.ymm1, threshhold) << 1);
         if (i & (mask == 0)) continue;
         __m256i packed = quad_pack_map256(quad);
 
-        // can't just use a for loop because const variables aren't const enough
-        currentOutput->configIndex = i * 4 + 3;
-        currentOutput->map = _mm256_extract_epi64(packed, 3);
-        currentOutput += (mask >> 3) & 1;
-
-        currentOutput->configIndex = i * 4 + 2;
-        currentOutput->map = _mm256_extract_epi64(packed, 2);
-        currentOutput += (mask >> 2) & 1;
-
-        currentOutput->configIndex = i * 4 + 1;
-        currentOutput->map = _mm256_extract_epi64(packed, 1);
-        currentOutput += (mask >> 1) & 1;
-
-        currentOutput->configIndex = i * 4;
-        currentOutput->map = _mm256_extract_epi64(packed, 0);
-        currentOutput += mask & 1;
+        for (int j = 3; j >= 0; j--) {
+            *currentOutput = i * 4 + j;
+            currentOutput += (mask >> j) & 1;
+        }
     }
 
     return currentOutput - outputs;
@@ -263,12 +257,12 @@ int getMinGroup(uint64_t mins, uint64_t maxs) {
 }
 
 //faster implementation of searching over the last layer while checking if you found the goal, unexpectedly big optimization
-int fastLastLayerSearch(uint64_t input, struct precomputed_hex_layer* layer, const int variant) {
+int fastLastLayerSearch(struct hlp_solve_globals* globals, uint64_t input, struct precomputed_hex_layer* layer) {
     __m256i doubledInput = _mm256_permute4x64_epi64(_mm256_castsi128_si256(unpack_uint_to_xmm(input)), 0x44);
 
     __m256i* quadMaps = (__m256i*) (layer->next_layer_luts);
 
-    iter += layer->next_layer_count;
+    globals->stats.total_iterations += layer->next_layer_count;
     for (int i = (layer->next_layer_count - 1) / 4; i >= 0; i--) {
         ymm_pair_t quad = quad_unpack_map256(_mm256_loadu_si256(quadMaps + i));
 
@@ -279,9 +273,9 @@ int fastLastLayerSearch(uint64_t input, struct precomputed_hex_layer* layer, con
         // everything to avoid branches
         quad.ymm0 = _mm256_shuffle_epi8(quad.ymm0, doubledInput);
         quad.ymm1 = _mm256_shuffle_epi8(quad.ymm1, doubledInput);
-        quad.ymm0 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm0), _mm256_cmpgt_epi8(quad.ymm0, goalMax));
-        quad.ymm1 = _mm256_or_si256(_mm256_cmpgt_epi8(goalMin, quad.ymm1), _mm256_cmpgt_epi8(quad.ymm1, goalMax));
-        // no need to apply dontCareMask, they already will always succeed anyways
+        quad.ymm0 = _mm256_or_si256(_mm256_cmpgt_epi8(globals->config.goal_min, quad.ymm0), _mm256_cmpgt_epi8(quad.ymm0, globals->config.goal_max));
+        quad.ymm1 = _mm256_or_si256(_mm256_cmpgt_epi8(globals->config.goal_min, quad.ymm1), _mm256_cmpgt_epi8(quad.ymm1, globals->config.goal_max));
+        // no need to apply globals->config.dont_care_mask, they already will always succeed anyways
         if (i && _mm256_testnzc_si256(split_test_mask256, quad.ymm0) && _mm256_testnzc_si256(split_test_mask256, quad.ymm1)) continue;
 
         bool successes[] = {
@@ -293,81 +287,61 @@ int fastLastLayerSearch(uint64_t input, struct precomputed_hex_layer* layer, con
         for (int j=0; j<4; j++) {
             if (!successes[j]) continue;
             int index = i * 4 + j;
-            iter -= index;
+            globals->stats.total_iterations -= index;
             uint16_t config = layer->next_layers[index]->config;
-            if (_solutionsFound != -1) {
-                _solutionsFound++;
+            if (globals->output.solutions_found != -1) {
+                globals->output.solutions_found++;
                 continue;
             }
-            if (_outputChain != 0) _outputChain[currLayer - 1] = config;
+            globals->output.chain_length = globals->config.current_bfs_depth;
+            if (globals->output.chain != 0) globals->output.chain[globals->config.current_bfs_depth - 1] = config;
             return 1;
         }
     }
     return 0;
 }
 
-//cache related code, used for removing identical or worse solutions
-long sameDepthHits = 0;
-long difLayerHits = 0;
-long misses = 0;
-long bucketUtil = 0;
-long cacheChecksTotal = 0;
-
-typedef struct cache_entry_s {
-    uint64_t map;
-    uint32_t trial;
-    uint8_t depth;
-} cache_entry_t;
-
-cache_entry_t* cacheArr;
-uint64_t cacheMask;
-uint32_t cacheTrialGlobal = 0;
-
-void clearCache() {
-    for (int i = 0; i< (1<<cacheSize); i++) {
-        cacheArr[i].map = 0;
-        cacheArr[i].depth = 0;
-        cacheArr[i].trial = 0;
-    }
-}
-
-int cacheCheck(uint64_t output, int depth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & UINT32_MAX), output >> 32) & cacheMask;
-    cache_entry_t* entry = cacheArr + pos;
-    cacheChecksTotal++;
-    if (entry->map == output && entry->depth <= depth && entry->trial == cacheTrialGlobal) {
-        if (entry->depth == depth) sameDepthHits++;
-        else difLayerHits++;
+int cacheCheck(struct hlp_solve_globals* globals, uint64_t output, int depth) {
+    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & UINT32_MAX), output >> 32) & globals->cache.mask;
+    struct cache_entry* entry = globals->cache.array + pos;
+    globals->stats.cache_total_checks++;
+    if (entry->map == output && entry->depth <= depth && entry->trial == globals->cache.global_trial) {
+        if (entry->depth == depth) globals->stats.cache_same_depth_hits++;
+        else globals->stats.cache_dif_layer_hits++;
         return 1;
     }
 
-    if (entry->trial == cacheTrialGlobal && entry->map != output) misses++;
-    else bucketUtil++;
-
+    if (entry->trial == globals->cache.global_trial && entry->map != output) globals->stats.cache_misses++;
+    else globals->stats.cache_bucket_util++;
 
     entry->map = output;
     entry->depth = depth;
-    entry->trial = cacheTrialGlobal;
+    entry->trial = globals->cache.global_trial;
 
     return 0;
 }
 
-void invalidateCache() {
-    cacheTrialGlobal++;
-    if (!cacheTrialGlobal) {
-        clearCache();
+void invalidateCache(struct cache* cache) {
+    cache->global_trial++;
+    // clear the cache if we somehow hit overflow
+    if (!cache->global_trial) {
+        for (int i = 0; i <= cache->mask; i++) {
+            cache->array[i].map = 0;
+            cache->array[i].depth = 0;
+            cache->array[i].trial = 0;
+        }
         // trial 0 should always mean blank
-        cacheTrialGlobal++;
+        cache->global_trial++;
     }
 }
 
 // the most number of separations that can be found in the distance check before it prunes
-int getDistThreshold(int remainingLayers) {
-    if (_searchAccuracy == ACCURACY_REDUCED) return remainingLayers - (remainingLayers > 2);
+int getDistThreshold(struct hlp_solve_globals* globals, int remainingLayers) {
+    if (globals->config.accuracy == ACCURACY_REDUCED) return remainingLayers - (remainingLayers > 2);
     // n is always sufficient anyways for 15-16 outputs
-    if (_searchAccuracy == ACCURACY_NORMAL || _uniqueOutputs > 14) return remainingLayers;
+    if (globals->config.accuracy == ACCURACY_NORMAL || globals->config.group > 14) return remainingLayers;
     // n+1 is always sufficient for 14 outputs
-    if (_searchAccuracy == ACCURACY_INCREASED || _uniqueOutputs > 13) return remainingLayers + 1;
+    if (globals->config.accuracy == ACCURACY_INCREASED || globals->config.group > 13) return remainingLayers + 1;
 
     // currently the best known general threshhold
     // +/-1 is for round up division
@@ -376,121 +350,130 @@ int getDistThreshold(int remainingLayers) {
 
 /* test to see if this map falls under a solution
  */
-int testMap(uint64_t map) {
+int testMap(struct hlp_solve_globals* globals, uint64_t map) {
     __m128i xmm = unpack_uint_to_xmm(map);
     return _mm_testz_si128(_mm_or_si128(
-                _mm_cmpgt_epi8(_mm256_castsi256_si128(goalMin), xmm),
-                _mm_cmpgt_epi8(xmm, _mm256_castsi256_si128(goalMax))
+                _mm_cmpgt_epi8(_mm256_castsi256_si128(globals->config.goal_min), xmm),
+                _mm_cmpgt_epi8(xmm, _mm256_castsi256_si128(globals->config.goal_max))
                 ), uint_max128);
 }
 
-branch_layer_t potentialLayers[800*32];
 
 //main dfs recursive search function
-int dfs(uint64_t input, int depth, struct precomputed_hex_layer* layer) {
+int dfs(struct hlp_solve_globals* globals, uint64_t input, int depth, struct precomputed_hex_layer* layer, uint16_t* staged_branches) {
     // test to see if we found a solution, even if we're not at the end. this
     // can happen even though it seems like it shouldn't
-    if (testMap(input)) {
-        currLayer = depth + 1;
-        if (_outputChain != 0) _outputChain[depth] = layer->config;
+    if (testMap(globals, input)) {
+        globals->output.chain_length = depth + 1;
+        if (globals->output.chain != 0) globals->output.chain[depth] = layer->config;
         return 1;
     }
 
-    if(depth == currLayer - 1) return fastLastLayerSearch(input, layer, solveType);
-    iter += layer->next_layer_count;
+    if(depth == globals->config.current_bfs_depth - 1) return fastLastLayerSearch(globals, input, layer);
+    globals->stats.total_iterations += layer->next_layer_count;
     int totalNextLayersIdentified = batchApplyAndCheckExact(
+            globals,
+            layer,
+            staged_branches,
             input,
-            layer->next_layer_luts,
-            potentialLayers + 800*depth,
-            layer->next_layer_count,
-            getDistThreshold(currLayer - depth - 1),
-            solveType
-            );
+            getDistThreshold(globals, globals->config.current_bfs_depth - depth - 1));
 
     for(int i = totalNextLayersIdentified - 1; i >= 0; i--) {
-        branch_layer_t* entry = potentialLayers + 800*depth + i;
-        int conf = entry->configIndex;
-        struct precomputed_hex_layer* next_layer = layer->next_layers[conf];
-        /* uint64_t output = apply_mapping_packed64(input, layer->next_layer_luts[conf]); */
+        struct precomputed_hex_layer* next_layer = layer->next_layers[staged_branches[i]];
         uint64_t output = apply_mapping_packed64(input, next_layer->map);
-        /* uint64_t output = entry->map; */
-        /* uint64_t output = hex_layer64(input, next_layer->config); */
 
         //cache check
-        if(cacheCheck(output, depth)) continue;
+        if(cacheCheck(globals, output, depth)) continue;
 
         //call next layers
-        if(dfs(output, depth + 1, next_layer)) {
-            if (_outputChain != 0) _outputChain[depth] = next_layer->config;
+        if(dfs(globals, output, depth + 1, next_layer, staged_branches + layer->next_layer_count)) {
+            if (globals->output.chain != 0) globals->output.chain[depth] = next_layer->config;
             return 1;
         }
         if (hlpSolveVerbosity < 3) continue;
-        if(depth == 0 && currLayer > 8) printf("done:%d/%d\n", conf, layer->next_layer_count);
+        if(depth == 0 && globals->config.current_bfs_depth > 8) printf("done:%d/%d\n", totalNextLayersIdentified - i, totalNextLayersIdentified);
     }
     return 0;
 }
 
-int init(hlp_request_t request) {
-    programStartT = clock();
-    if (!cacheArr) cacheArr = calloc((1 << cacheSize), sizeof(cache_entry_t));
-    cacheMask = (1 << cacheSize) - 1;
-    iter = 0;
-    cacheChecksTotal = 0;
+static struct cache global_cache = {0};
 
-    solveType = request.solveType;
+int init(struct hlp_solve_globals* globals, hlp_request_t request) {
+    globals->stats.start_time = clock();
+    if (!globals->cache.array) {
+        if (!global_cache.array) global_cache.array = calloc((1 << cacheSize), sizeof(struct cache_entry));
+        globals->cache.array = global_cache.array;
+        globals->cache.global_trial = global_cache.global_trial;
+        globals->cache.mask = (1 << cacheSize) - 1;
+    }
+    globals->config.solve_type = request.solveType;
+    globals->stats.total_iterations = 0;
 
-    switch (solveType) {
+    switch (globals->config.solve_type) {
         case HLP_SOLVE_TYPE_EXACT:
-            _uniqueOutputs = get_group64(request.mins);
+            globals->config.group = get_group64(request.mins);
             break;
         case HLP_SOLVE_TYPE_PARTIAL:
-            _uniqueOutputs = getMinGroup(request.mins, request.maxs);
+            globals->config.group = getMinGroup(request.mins, request.maxs);
             break;
         default:
             printf("you found a search mode that isn't implemented\n");
             return 1;
     }
-
     
-    goalMin = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.mins)), 0x44);
-    goalMax = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.maxs)), 0x44);
+    globals->config.goal_min = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.mins)), 0x44);
+    globals->config.goal_max = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.maxs)), 0x44);
 
-    dontCareMask = _mm256_cmpeq_epi8(_mm256_sub_epi8(goalMax, goalMin), low_halves_mask256);
-    dontCareCount = _popcnt32(_mm_movemask_epi8(_mm256_castsi256_si128(dontCareMask)));
-    dontCarePostSortPerm = _mm256_min_epi8(identity_permutation256, _mm256_set1_epi8(15 - dontCareCount));
+    globals->config.dont_care_mask = _mm256_cmpeq_epi8(_mm256_sub_epi8(globals->config.goal_max, globals->config.goal_min), low_halves_mask256);
+    globals->config.dont_care_count = _popcnt32(_mm_movemask_epi8(_mm256_castsi256_si128(globals->config.dont_care_mask)));
+    globals->config.dont_care_post_sort_perm = _mm256_min_epi8(identity_permutation256, _mm256_set1_epi8(15 - globals->config.dont_care_count));
 
     return 0;
 }
 
 //main search loop
-int singleSearchInner(struct precomputed_hex_layer* base_layer, int maxDepth) {
-    currLayer = 1;
+int singleSearchInner(struct hlp_solve_globals* globals, struct precomputed_hex_layer* base_layer, int maxDepth) {
+    globals->config.current_bfs_depth = 1;
 
-    while (currLayer <= maxDepth) {
-        if(dfs(identity_permutation_packed64, 0, base_layer)) {
+    while (globals->config.current_bfs_depth <= maxDepth) {
+        uint16_t* staged_branches = malloc(base_layer->next_layer_count * globals->config.current_bfs_depth * sizeof(uint16_t));
+        int success = dfs(globals, identity_permutation_packed64, 0, base_layer, staged_branches);
+        free(staged_branches);
+        if (success) {
             if (hlpSolveVerbosity >= 3) {
-                printf("solution found at %.2fms\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000);
-                printf("total iter over all: %'ld\n", iter);
-                printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n", cacheChecksTotal, sameDepthHits, difLayerHits, misses, bucketUtil);
+                printf("solution found at %.2fms\n", (double)(clock() - globals->stats.start_time) / CLOCKS_PER_SEC * 1000);
+                printf("total iter over all: %'ld\n", globals->stats.total_iterations);
+                printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n",
+                        globals->stats.cache_total_checks,
+                        globals->stats.cache_same_depth_hits,
+                        globals->stats.cache_dif_layer_hits,
+                        globals->stats.cache_misses,
+                        globals->stats.cache_bucket_util);
             }
-            return currLayer;
+            return globals->output.chain_length;
         }
-        invalidateCache();
-        currLayer++;
+        invalidateCache(&globals->cache);
+        globals->config.current_bfs_depth++;
 
         if (hlpSolveVerbosity < 2) continue;
-        printf("search over layer %d done\n",currLayer - 1);
+        printf("search over layer %d done\n",globals->config.current_bfs_depth - 1);
 
         if (hlpSolveVerbosity < 3) continue;
-        printf("layer search done after %.2fms; %'ld iterations\n", (double)(clock() - programStartT) / CLOCKS_PER_SEC * 1000, iter);
+        printf("layer search done after %.2fms; %'ld iterations\n", (double)(clock() - globals->stats.start_time) / CLOCKS_PER_SEC * 1000, globals->stats.total_iterations);
     }
     if (hlpSolveVerbosity >= 2) {
         printf("failed to beat depth\n");
-        printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n", cacheChecksTotal, sameDepthHits, difLayerHits, misses, bucketUtil);
+        printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n",
+                globals->stats.cache_total_checks,
+                globals->stats.cache_same_depth_hits,
+                globals->stats.cache_dif_layer_hits,
+                globals->stats.cache_misses,
+                globals->stats.cache_bucket_util);
     }
     return maxDepth + 1;
 }
 
+/*
 int singleSearch(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
     if (maxDepth < 0 || maxDepth > 31) maxDepth = 31;
     if (request.mins == 0) {
@@ -500,23 +483,25 @@ int singleSearch(hlp_request_t request, uint16_t* outputChain, int maxDepth, enu
 
     if (init(request)) return -1;
 
-    _outputChain = outputChain;
-    _solutionsFound = -1;
-    _searchAccuracy = accuracy;
-    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(_uniqueOutputs);
+    globals->output.chain = outputChain;
+    globals->output.solutions_found = -1;
+    globals->config.accuracy = accuracy;
+    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(globals->config.group);
     return singleSearchInner(identity_layer, maxDepth);
 }
+*/
 
 int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum SearchAccuracy accuracy) {
+    struct hlp_solve_globals globals = {0};
     int requestedMaxDepth = maxDepth;
     if (maxDepth < 0 || maxDepth > 31) maxDepth = 31;
 
-    if (init(request)) {
+    if (init(&globals, request)) {
         printf("an error occurred\n");
         return requestedMaxDepth + 1;
     }
 
-    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(_uniqueOutputs);
+    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(globals.config.group);
     /* return requestedMaxDepth + 1; */
 
     if (request.mins == 0) {
@@ -524,8 +509,8 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
         return 1;
     }
 
-    _outputChain = outputChain;
-    _solutionsFound = -1;
+    globals.output.chain = outputChain;
+    globals.output.solutions_found = -1;
     int solutionLength = maxDepth;
 
     if (hlpSolveVerbosity >= 2) {
@@ -537,30 +522,25 @@ int solve(hlp_request_t request, uint16_t* outputChain, int maxDepth, enum Searc
     // still often gets an optimal solution, so we start with that so the
     // "real" search can cut short if it doesn't find a better solution.
     // when it's not faster, the solution is found pretty fast anyways.
-    _searchAccuracy = ACCURACY_REDUCED;
-    solutionLength = singleSearchInner(identity_layer, solutionLength);
+    globals.config.accuracy = ACCURACY_REDUCED;
+    solutionLength = singleSearchInner(&globals, identity_layer, solutionLength);
 
     if (solutionLength == maxDepth) solutionLength = maxDepth;
     if (accuracy == ACCURACY_REDUCED) return solutionLength;
-    long totalIter = iter;
-    iter = 0;
+    long totalIter = globals.stats.total_iterations;
+    globals.stats.total_iterations = 0;
 
     if (hlpSolveVerbosity >= 2) printf("starting main search\n");
 
-    _searchAccuracy = accuracy;
-    int result = singleSearchInner(identity_layer, solutionLength - 1);
-    if (hlpSolveVerbosity >= 2) printf("total iter across searches: %'ld\n", totalIter + iter);
+    globals.config.accuracy = accuracy;
+    int result = singleSearchInner(&globals, identity_layer, solutionLength - 1);
+    if (hlpSolveVerbosity >= 2) printf("total iter across searches: %'ld\n", totalIter + globals.stats.total_iterations);
     if (result > maxDepth) return requestedMaxDepth + 1;
     return result;
 }
 
 void hlpSetCacheSize(int size) {
-    if (cacheArr) {
-        free(cacheArr);
-        cacheArr = 0;
-    }
     cacheSize = size;
-    cacheMask = (1 << size) - 1;
 }
 
 uint64_t applyChain(uint64_t start, uint16_t* chain, int length) {
@@ -607,7 +587,6 @@ void printHlpRequest(hlp_request_t request) {
         printf("[%X-%X]", minVal, maxVal);
     }
 }
-
 
 void hlpPrintSearch(char* map) {
     uint16_t result[32];

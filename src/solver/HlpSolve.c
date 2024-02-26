@@ -27,7 +27,6 @@ int cacheSize = 22;
 
 __m256i goalMin;
 __m256i goalMax;
-
 int hlpSolveVerbosity = 1;
 
 __m256i dontCareMask;
@@ -127,36 +126,27 @@ hlp_request_t parseHlpRequestStr(char* str) {
     return result;
 }
 
-
-inline ymm_pair_t combineRangesInner(__m256i equalityReference, ymm_pair_t mins, int shift) {
-    if (shift > 0) {
-        // left shift
-        __m256i mask = _mm256_cmpeq_epi8(equalityReference, _mm256_srli_si256(equalityReference, shift));
-        mins.ymm0 = _mm256_max_epu8(mins.ymm0, _mm256_slli_si256(_mm256_and_si256(mins.ymm0, mask), shift));
-        mins.ymm1 = _mm256_max_epu8(mins.ymm1, _mm256_slli_si256(_mm256_and_si256(mins.ymm1, mask), shift));
-    } else {
-        // right shift
-        __m256i mask = _mm256_cmpeq_epi8(equalityReference, _mm256_slli_si256(equalityReference, -shift));
-        mins.ymm0 = _mm256_max_epu8(mins.ymm0, _mm256_srli_si256(_mm256_and_si256(mins.ymm0, mask), -shift));
-        mins.ymm1 = _mm256_max_epu8(mins.ymm1, _mm256_srli_si256(_mm256_and_si256(mins.ymm1, mask), -shift));
-    }
-}
+#define COMBINE_RANGES_INNER(shift, s1, s2)\
+    mask = _mm256_cmpeq_epi8(equalityReference, _mm256_s##s1##li_si256(equalityReference, shift));\
+    minsAndMaxs.ymm0 = _mm256_max_epu8(minsAndMaxs.ymm0, _mm256_s##s2##li_si256(_mm256_and_si256(minsAndMaxs.ymm0, mask), shift));\
+    minsAndMaxs.ymm1 = _mm256_max_epu8(minsAndMaxs.ymm1, _mm256_s##s2##li_si256(_mm256_and_si256(minsAndMaxs.ymm1, mask), shift));\
 
 inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
     // we invert the max values so that after shifting things, any zeros
     // shifted in will not affect anything, as we only combine things with max
     // function
     minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
+    __m256i mask;
 
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 1);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 2);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 4);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, 8);
+    COMBINE_RANGES_INNER(1, r, l);
+    COMBINE_RANGES_INNER(2, r, l);
+    COMBINE_RANGES_INNER(4, r, l);
+    COMBINE_RANGES_INNER(8, r, l);
 
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -1);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -2);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -4);
-    minsAndMaxs = combineRangesInner(equalityReference, minsAndMaxs, -8);
+    COMBINE_RANGES_INNER(1, l, r);
+    COMBINE_RANGES_INNER(2, l, r);
+    COMBINE_RANGES_INNER(4, l, r);
+    COMBINE_RANGES_INNER(8, l, r);
 
     minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
 }

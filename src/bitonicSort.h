@@ -4,80 +4,71 @@
 #include <immintrin.h>
 #include "vector_tools.h"
 
-extern const __m256i bitonicSortByteSwap, bitonicSortWordReverse1x8, bitonicSortWordReverse2x4, bitonicSortWordReverse4x2;
+#define BITONIC_SORT_BLENDD(pair, imm) \
+    pair = (ymm_pair_t) {_mm256_blend_epi32(pair.ymm0, pair.ymm1, (imm << 4) | imm), \
+    _mm256_blend_epi32(pair.ymm1, pair.ymm0, (imm << 4) | imm)}
 
-inline ymm_pair_t bitonic_sort4x16x8_blend_w(ymm_pair_t pair) {
-    ymm_pair_t newpair = {_mm256_blend_epi16(pair.ymm0, pair.ymm1, 0b10101010),
-        _mm256_blend_epi16(pair.ymm1, pair.ymm0, 0b10101010)};
-    return newpair;
-}
+#define BITONIC_SORT_BLENDW(pair) \
+    pair = (ymm_pair_t) {_mm256_blend_epi16(pair.ymm0, pair.ymm1, 0b10101010), \
+        _mm256_blend_epi16(pair.ymm1, pair.ymm0, 0b10101010)}
 
-inline ymm_pair_t bitonic_sort4x16x8_blend(ymm_pair_t pair, const uint8_t blendConstant) {
-    if (!blendConstant) return pair;
-    const uint8_t actualBlendConstant = (blendConstant & 0xf) | ((blendConstant & 0xf) << 4);
+#define BITONIC_SORT_SHUFD(pair, imm) \
+    pair.ymm1 = _mm256_shuffle_epi32(pair.ymm1, imm)
 
-    ymm_pair_t newpair = {_mm256_blend_epi32(pair.ymm0, pair.ymm1, actualBlendConstant),
-        _mm256_blend_epi32(pair.ymm1, pair.ymm0, actualBlendConstant)};
-    return newpair;
-}
+#define BITONIC_SORT_SHUFB(pair, indices) \
+    pair.ymm1 = _mm256_shuffle_epi8(pair.ymm1, indices)
 
-inline ymm_pair_t bitonic_sort4x16x8_minmax(ymm_pair_t pair) {
-    ymm_pair_t newpair = {_mm256_min_epu8(pair.ymm0, pair.ymm1),
-        _mm256_max_epu8(pair.ymm1, pair.ymm0)};
-    return newpair;
-}
+#define BITONIC_SORT_MINMAX(pair) \
+    pair = (ymm_pair_t) {_mm256_min_epu8(pair.ymm0, pair.ymm1), \
+        _mm256_max_epu8(pair.ymm1, pair.ymm0)}
 
-inline ymm_pair_t bitonic_sort4x16x8_step(ymm_pair_t pair, const uint8_t blendConstant, const uint8_t shufConstant) {
-    pair = bitonic_sort4x16x8_blend(pair, blendConstant);
-    pair.ymm1 = _mm256_shuffle_epi32(pair.ymm1, shufConstant);
-    return bitonic_sort4x16x8_minmax(pair);
-}
+#define BITONIC_SORT_STEP(pair, blend_imm, shufd_imm) \
+    BITONIC_SORT_BLENDD(pair, blend_imm); \
+    BITONIC_SORT_SHUFD(pair, shufd_imm); \
+    BITONIC_SORT_MINMAX(pair)
 
 inline ymm_pair_t bitonic_sort4x16x8_inner(ymm_pair_t pair) {
-    const uint8_t shufd_identity = 0b11100100;
-    const uint8_t shufd_qswap = 0b01001110;
-    const uint8_t shufd_dswap = 0b10110001;
-    const uint8_t shufd_dreverse = 0b00011011;
-
     // zip together
-    __m256i tmp = _mm256_unpacklo_epi8(pair.ymm1, pair.ymm0);
-    pair.ymm1 = _mm256_unpackhi_epi8(pair.ymm1, pair.ymm0);
-    pair.ymm0 = tmp;
+    pair = (ymm_pair_t) {_mm256_unpackhi_epi8(pair.ymm1, pair.ymm0),
+        _mm256_unpacklo_epi8(pair.ymm1, pair.ymm0)};
 
     // 2
-    pair = bitonic_sort4x16x8_minmax(pair);
+    BITONIC_SORT_MINMAX(pair);
 
     // 4
-    pair = bitonic_sort4x16x8_step(pair, 0, shufd_dswap);
-    pair = bitonic_sort4x16x8_step(pair, 0b1010, shufd_dswap);
+    BITONIC_SORT_SHUFD(pair, SHUFD_REV_4x2x32);
+    BITONIC_SORT_MINMAX(pair);
+
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
 
     // 8
-    pair = bitonic_sort4x16x8_step(pair, 0, shufd_dreverse);
-    pair = bitonic_sort4x16x8_step(pair, 0b1010, shufd_dswap);
-    pair = bitonic_sort4x16x8_step(pair, 0b1100, shufd_qswap);
+    BITONIC_SORT_SHUFD(pair, SHUFD_REV_2x4x32);
+    BITONIC_SORT_MINMAX(pair);
+
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
+    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x2x64);
 
     // 16
-    pair.ymm1 = _mm256_shuffle_epi8(pair.ymm1, bitonicSortWordReverse1x8);
-    pair = bitonic_sort4x16x8_minmax(pair);
-    pair = bitonic_sort4x16x8_blend_w(pair);
-    pair.ymm1 = _mm256_shuffle_epi8(pair.ymm1, bitonicSortWordReverse2x4);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_2x8x16);
+    BITONIC_SORT_MINMAX(pair);
+    BITONIC_SORT_BLENDW(pair);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_4x4x16);
 
-    pair = bitonic_sort4x16x8_step(pair, 0b1010, shufd_dswap);
-    pair = bitonic_sort4x16x8_step(pair, 0b1100, shufd_qswap);
-    pair = bitonic_sort4x16x8_step(pair, 0b1010, shufd_dswap);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
+    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x2x64);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
 
     // pack back together
     // interlace words
-    pair.ymm1 = _mm256_shuffle_epi8(pair.ymm1, bitonicSortWordReverse4x2);
-    pair = bitonic_sort4x16x8_blend_w(pair);
-    pair.ymm1 = _mm256_shuffle_epi8(pair.ymm1, bitonicSortWordReverse4x2);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_8x2x16);
+    BITONIC_SORT_BLENDW(pair);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_8x2x16);
 
-    // pack bytes
-    ymm_pair_t newpair = {_mm256_packus_epi16(_mm256_srli_epi16(pair.ymm0, 8), _mm256_srli_epi16(pair.ymm1, 8)),
-        _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, low_bytes_mask256), _mm256_and_si256(pair.ymm1, low_bytes_mask256))};
-    return newpair;
+    // interlace bytes
+    __m256i shifted = _mm256_packus_epi16(_mm256_srli_epi16(pair.ymm0, 8), _mm256_srli_epi16(pair.ymm1, 8));
+    __m256i masked = _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, low_bytes_mask256), _mm256_and_si256(pair.ymm1, low_bytes_mask256));
+    return (ymm_pair_t) {shifted, masked};
 }
-
 
 extern void bitonic_sort4x16x8(uint8_t* arrays);
 

@@ -138,7 +138,7 @@ hlp_request_t parseHlpRequestStr(char* str) {
     minsAndMaxs.ymm0 = _mm256_max_epu8(minsAndMaxs.ymm0, _mm256_s##s2##li_si256(_mm256_and_si256(minsAndMaxs.ymm0, mask), shift));\
     minsAndMaxs.ymm1 = _mm256_max_epu8(minsAndMaxs.ymm1, _mm256_s##s2##li_si256(_mm256_and_si256(minsAndMaxs.ymm1, mask), shift));\
 
-inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
+ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
     // we invert the max values so that after shifting things, any zeros
     // shifted in will not affect anything, as we only combine things with max
     // function
@@ -158,7 +158,7 @@ inline ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMax
     minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
 }
 
-inline int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
+int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
     __m256i finalIndices = _mm256_and_si256(sortedYmm, low_halves_mask256);
     __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
     ymm_pair_t final = {_mm256_shuffle_epi8(globals->config.goal_min, finalIndices), _mm256_shuffle_epi8(globals->config.goal_max, finalIndices)};
@@ -180,7 +180,7 @@ inline int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256
     return mask;
 }
 
-inline int getLegalDistCheckMaskPartial(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
+int getLegalDistCheckMaskPartial(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
     __m256i final = _mm256_and_si256(sortedYmm, low_halves_mask256);
     __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
 

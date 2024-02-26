@@ -27,7 +27,7 @@
     BITONIC_SORT_SHUFD(pair, shufd_imm); \
     BITONIC_SORT_MINMAX(pair)
 
-inline ymm_pair_t bitonic_sort4x16x8_inner(ymm_pair_t pair) {
+static ymm_pair_t bitonic_sort4x16x8_inner(ymm_pair_t pair) {
     // zip together
     pair = (ymm_pair_t) {_mm256_unpackhi_epi8(pair.ymm1, pair.ymm0),
         _mm256_unpacklo_epi8(pair.ymm1, pair.ymm0)};

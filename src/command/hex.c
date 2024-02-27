@@ -5,15 +5,15 @@
 
 
 
-char** appendStr(char** str1, char* str2) { 
+char** append_str(char** str1, char* str2) { 
     if (!str2) return str1;
 
     if (*str1) {
-        char* newStr = malloc(strlen(*str1) + strlen(str2) + 1);
-        strcpy(newStr, *str1);
-        if (str2) strcat(newStr, str2);
+        char* new_str = malloc(strlen(*str1) + strlen(str2) + 1);
+        strcpy(new_str, *str1);
+        if (str2) strcat(new_str, str2);
         free(*str1);
-        *str1 = newStr;
+        *str1 = new_str;
     } else {
         *str1 = malloc(strlen(str2) + 1);
         strcpy(*str1, str2);
@@ -39,7 +39,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
     struct arg_settings_command_hex* settings = state->input;
     switch (key) {
         case ARGP_KEY_ARG:
-            appendStr(&(settings->map), arg);
+            append_str(&(settings->map), arg);
             break;
         case ARGP_KEY_INIT:
             settings->map = 0;
@@ -47,7 +47,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
             state->child_inputs[0] = &settings->settings_solver_hex;
             break;
         case ARGP_KEY_SUCCESS:
-            hlpPrintSearch(settings->map);
+            hlp_print_search(settings->map);
             break;
         case ARGP_KEY_NO_ARGS:
             argp_state_help(state, stderr, ARGP_HELP_USAGE | ARGP_HELP_SHORT_USAGE | ARGP_HELP_SEE);

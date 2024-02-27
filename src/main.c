@@ -4,10 +4,10 @@
 #include <immintrin.h>
 #include <time.h>
 #include <locale.h>
-#include "bitonicSort.h"
+#include "bitonic_sort.h"
 
 #include "arg_global.h"
-#include "solver/HlpSolve.h"
+#include "solver/hlp_solve.h"
 #include "command/cat.h"
 #include "command/hex.h"
 #include "search/hlp_random.h"
@@ -30,7 +30,7 @@ const char *argp_program_version = "version 1.1-dev";
 
 int global_verbosity;
 
-error_t processSubcommand(const char* name, struct argp_state* state, struct argp* argpStruct, void* input) {
+error_t process_subcommand(const char* name, struct argp_state* state, struct argp* argp_struct, void* input) {
     int argc = state->argc - state->next + 1;
     char** argv = &state->argv[state->next - 1];
     /* input->global = state->input; */
@@ -42,7 +42,7 @@ error_t processSubcommand(const char* name, struct argp_state* state, struct arg
 
     sprintf(argv[0], "%s %s", state->name, name);
 
-    error_t error = argp_parse(argpStruct, argc, argv, 0, &argc, input);
+    error_t error = argp_parse(argp_struct, argc, argv, 0, &argc, input);
 
     free(argv[0]);
     argv[0] = argv0;
@@ -103,7 +103,7 @@ static error_t parse_opt_global(int key, char* arg, struct argp_state *state) {
                 if (!strcmp(arg, subcommand_entries[i].name)) {
                     // this should always be safe (ie, not technically works, actually safe)
                     *(struct arg_settings_global**) ( (void*) &settings_sub + subcommand_entries[i].global_pointer_offset ) = settings;
-                    return processSubcommand(arg, state, subcommand_entries[i].argp, &settings_sub);
+                    return process_subcommand(arg, state, subcommand_entries[i].argp, &settings_sub);
                 }
             }
             if (!strcmp(arg, "search")) {
@@ -152,19 +152,8 @@ int main(int argc, char** argv) {
     setlocale(LC_NUMERIC, "");
 
     struct arg_settings_global settings;
-    error_t argpError = argp_parse(&argp_global, argc, argv, ARGP_IN_ORDER, 0, &settings);
-    if (argpError) return argpError;
+    error_t argp_error = argp_parse(&argp_global, argc, argv, ARGP_IN_ORDER, 0, &settings);
+    if (argp_error) return argp_error;
 
-    /*
-    srand(settings.randomSeed);
-    hlpSolveVerbosity = settings.verbosity;
-
-    if (settings.randomSearchCount == 0)
-        printSearch(settings.map, settings.maxDepth, settings.accuracy);
-    else {
-        randomSearch(settings.randomSearchCount, settings.randomSearchGroup, settings.maxDepth, settings.accuracy);
-    }
-    */
     return 0;
-
 }

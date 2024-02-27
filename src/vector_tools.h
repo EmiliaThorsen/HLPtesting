@@ -82,7 +82,7 @@ DECLARE_MANY_HALVES(HI, 256);
 
 // packed, little endian, big endian
 #define IDENTITY_PERM_PK64 ((uint64_t) 0x7f6e5d4c3b2a1908)
-#define IDENTITY_PERM_lE64 ((uint64_t) 0xfedcba9876543210)
+#define IDENTITY_PERM_LE64 ((uint64_t) 0xfedcba9876543210)
 #define IDENTITY_PERM_BE64 ((uint64_t) 0x0123456789abcdef)
 
 #define SHUFB_IDENTITY_128      XMM_SHUFB(  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15)
@@ -142,10 +142,10 @@ static uint64_t big_endian_xmm_to_uint(__m128i xmm) {
 }
 
 static ymm_pair_t quad_unpack_map256(__m256i packed) {
-    const __m256i upackShifts = {4, 0, 4, 0};
+    const __m256i upack_shifts = {4, 0, 4, 0};
     ymm_pair_t pair = {
-        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0x44), upackShifts), LO_HALVES_4_256),
-        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0xee), upackShifts), LO_HALVES_4_256)};
+        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0x44), upack_shifts), LO_HALVES_4_256),
+        _mm256_and_si256(_mm256_srlv_epi64(_mm256_shuffle_epi32(packed, 0xee), upack_shifts), LO_HALVES_4_256)};
     return pair;
 }
 

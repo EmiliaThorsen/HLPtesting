@@ -1,4 +1,4 @@
-#include "bitonicSort.h"
+#include "bitonic_sort.h"
 #include "vector_tools.h"
 
 void bitonic_sort4x16x8(uint8_t* arrays) {

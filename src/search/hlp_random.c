@@ -5,13 +5,13 @@
 
 static int verbosity;
 
-uint64_t randUint64() {
+uint64_t rand_uint64() {
     uint64_t result = 0;
     for (int i = 0; i < 8; i++) result = (result << 8) | (rand() & 0xff);
     return result;
 }
 
-uint64_t randHexKPerm(int n, int k) {
+uint64_t rand_hex_kperm(int n, int k) {
     uint64_t result = 0;
     uint16_t used = 0;
     for (int i=n; i > n-k; i--) {
@@ -23,28 +23,28 @@ uint64_t randHexKPerm(int n, int k) {
     return result ;
 }
 
-uint64_t randHexPerm(int length) {
-    return randHexKPerm(length, length);
+uint64_t rand_hex_perm(int length) {
+    return rand_hex_kperm(length, length);
 }
 
 
-char hexDigit(int value) {
+char hex_digit(int value) {
     if (value < 10) return value + '0';
     return value - 10 + 'a';
 }
 
-void randomizeMap(char* dest, int group) {
+void randomize_map(char* dest, int group) {
     dest[16] = 0;
     if (!group) {
         for (int i=0; i<16; i++) {
-            dest[i] = hexDigit(rand() % 16);
+            dest[i] = hex_digit(rand() % 16);
         }
         return;
     }
 
     // technically should get a random combination, but a kperm is
     // easier and has the same effect
-    uint64_t kperm = randHexKPerm(16, group);
+    uint64_t kperm = rand_hex_kperm(16, group);
     uint64_t map = kperm;
 
     // fill in the rest of values
@@ -54,20 +54,20 @@ void randomizeMap(char* dest, int group) {
         map = (map << 4) | digit;
     }
 
-    uint64_t shufflePerm = randHexPerm(16);
+    uint64_t shuffle_perm = rand_hex_perm(16);
     // shuffle to make the beginning not a kperm
     for (int i=0; i < 16; i++) {
-        int index = shufflePerm & 15;
-        shufflePerm >>= 4;
-        dest[i] = hexDigit((map >> index*4) & 15);
+        int index = shuffle_perm & 15;
+        shuffle_perm >>= 4;
+        dest[i] = hex_digit((map >> index*4) & 15);
     }
 }
 
-void randomSearch(int count, int group) {
+void random_search(int count, int group) {
     for (int i=0; i<count; i++) {
         char map[17];
-        randomizeMap(map, group);
-        hlpPrintSearch(map);
+        randomize_map(map, group);
+        hlp_print_search(map);
     }
 }
 
@@ -113,7 +113,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
         case ARGP_KEY_SUCCESS:
             srand(settings->seed);
             verbosity = settings->global->verbosity;
-            randomSearch(settings->trials, settings->group);
+            random_search(settings->trials, settings->group);
             return 1;
     }
     return 0;

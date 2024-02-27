@@ -1,7 +1,7 @@
 #ifndef SEARCH_HLP_RANDOM_H
 #define SEARCH_HLP_RANDOM_H
 #include "../arg_global.h"
-#include "../solver/HlpSolve.h"
+#include "../solver/hlp_solve.h"
 
 struct arg_settings_search_hlp_random {
     struct arg_settings_global* global;

@@ -4,10 +4,10 @@ bin_PROGRAMS = hlpt
 
 hlpt_SOURCES = ./src/main.c
 hlpt_SOURCES += ./src/aa_tree.c
-hlpt_SOURCES += ./src/bitonicSort.c
+hlpt_SOURCES += ./src/bitonic_sort.c
 hlpt_SOURCES += ./src/command/hex.c
 hlpt_SOURCES += ./src/search/hlp_random.c
-hlpt_SOURCES += ./src/solver/HlpSolve.c
+hlpt_SOURCES += ./src/solver/hlp_solve.c
 hlpt_SOURCES += ./src/vector_tools.c
 hlpt_SOURCES += ./src/redstone.c
 

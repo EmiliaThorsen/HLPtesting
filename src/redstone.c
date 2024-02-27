@@ -19,8 +19,8 @@ __m128i hex_layer128(__m128i start, uint16_t config) {
     // unpack config
     __m128i v_config = _mm_cvtsi32_si128(config);
     __m128i back2 = _mm_broadcastb_epi8(v_config);
-    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), low_halves_mask128);
-    back2 = _mm_and_si128(back2, low_halves_mask128);
+    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), LO_HALVES_4_128);
+    back2 = _mm_and_si128(back2, LO_HALVES_4_128);
 
     // shift left then arith right so bit we shift to msb gets cast to whole register
     v_config = _mm_shuffle_epi32(v_config, 0);
@@ -66,14 +66,14 @@ struct precomputed_hex_layer* precompute_hex_layers(int group) {
     uint16_t* layer_configs_tmp = malloc(LAYER_COUNT_ESTIMATE * sizeof(uint16_t));
 
     int64_t flag;
-    aatree_node* unique_next_layers_tree = aa_tree_insert(identity_permutation_packed64, NULL, &flag);
+    aatree_node* unique_next_layers_tree = aa_tree_insert(IDENTITY_PERM_PK64, NULL, &flag);
 
     clock_t time_start = clock();
     if (verbosity >= 3) printf("starting layer precompute\n");
 
     // identify the unique first layers
     for(int conf = 0; conf < CONFIG_COUNT; conf++) {
-        uint64_t output = hex_layer64(identity_permutation_packed64, conf);
+        uint64_t output = hex_layer64(IDENTITY_PERM_PK64, conf);
         // skip if doesn't pass tests
         if (get_group64(output) < group) continue;
         if (aa_tree_search(unique_next_layers_tree, output)) continue;
@@ -90,11 +90,11 @@ struct precomputed_hex_layer* precompute_hex_layers(int group) {
     // first is always identity, ie the first layer
     struct precomputed_hex_layer* layers = malloc((layer_count + 1) * sizeof(struct precomputed_hex_layer));
     layers[0].config = 0;
-    layers[0].map = identity_permutation_packed64;
+    layers[0].map = IDENTITY_PERM_PK64;
 
     for (int i = 0; i < layer_count; i++) {
         layers[i + 1].config = layer_configs_tmp[i];
-        layers[i + 1].map = hex_layer64(identity_permutation_packed64, layer_configs_tmp[i]);
+        layers[i + 1].map = hex_layer64(IDENTITY_PERM_PK64, layer_configs_tmp[i]);
     }
     free(layer_configs_tmp); // no longer needed
 

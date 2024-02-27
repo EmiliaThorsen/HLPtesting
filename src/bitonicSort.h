@@ -36,37 +36,37 @@ static ymm_pair_t bitonic_sort4x16x8_inner(ymm_pair_t pair) {
     BITONIC_SORT_MINMAX(pair);
 
     // 4
-    BITONIC_SORT_SHUFD(pair, SHUFD_REV_4x2x32);
+    BITONIC_SORT_SHUFD(pair, SHUFD_REV_2x32_256);
     BITONIC_SORT_MINMAX(pair);
 
-    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_2x32_256);
 
     // 8
-    BITONIC_SORT_SHUFD(pair, SHUFD_REV_2x4x32);
+    BITONIC_SORT_SHUFD(pair, SHUFD_REV_4x32_256);
     BITONIC_SORT_MINMAX(pair);
 
-    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
-    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x2x64);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_2x32_256);
+    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x64_256);
 
     // 16
-    BITONIC_SORT_SHUFB(pair, SHUFB_REV_2x8x16);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_8x16_256);
     BITONIC_SORT_MINMAX(pair);
     BITONIC_SORT_BLENDW(pair);
-    BITONIC_SORT_SHUFB(pair, SHUFB_REV_4x4x16);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_4x16_256);
 
-    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
-    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x2x64);
-    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_4x2x32);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_2x32_256);
+    BITONIC_SORT_STEP(pair, 0b1100, SHUFD_REV_2x64_256);
+    BITONIC_SORT_STEP(pair, 0b1010, SHUFD_REV_2x32_256);
 
     // pack back together
     // interlace words
-    BITONIC_SORT_SHUFB(pair, SHUFB_REV_8x2x16);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_2x16_256);
     BITONIC_SORT_BLENDW(pair);
-    BITONIC_SORT_SHUFB(pair, SHUFB_REV_8x2x16);
+    BITONIC_SORT_SHUFB(pair, SHUFB_REV_2x16_256);
 
     // interlace bytes
     __m256i shifted = _mm256_packus_epi16(_mm256_srli_epi16(pair.ymm0, 8), _mm256_srli_epi16(pair.ymm1, 8));
-    __m256i masked = _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, low_bytes_mask256), _mm256_and_si256(pair.ymm1, low_bytes_mask256));
+    __m256i masked = _mm256_packus_epi16(_mm256_and_si256(pair.ymm0, LO_HALVES_8_256), _mm256_and_si256(pair.ymm1, LO_HALVES_8_256));
     return (ymm_pair_t) {shifted, masked};
 }
 

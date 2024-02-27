@@ -142,7 +142,7 @@ ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
     // we invert the max values so that after shifting things, any zeros
     // shifted in will not affect anything, as we only combine things with max
     // function
-    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, UINT256_MAX);
     __m256i mask;
 
     COMBINE_RANGES_INNER(1, r, l);
@@ -155,19 +155,19 @@ ymm_pair_t combineRanges(__m256i equalityReference, ymm_pair_t minsAndMaxs) {
     COMBINE_RANGES_INNER(4, l, r);
     COMBINE_RANGES_INNER(8, l, r);
 
-    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, uint_max256);
+    minsAndMaxs.ymm1 = _mm256_xor_si256(minsAndMaxs.ymm1, UINT256_MAX);
 }
 
 int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
-    __m256i finalIndices = _mm256_and_si256(sortedYmm, low_halves_mask256);
-    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
+    __m256i finalIndices = _mm256_and_si256(sortedYmm, LO_HALVES_4_256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), LO_HALVES_4_256);
     ymm_pair_t final = {_mm256_shuffle_epi8(globals->config.goal_min, finalIndices), _mm256_shuffle_epi8(globals->config.goal_max, finalIndices)};
     final = combineRanges(current, final);
 
     // if the min is higher than the max, that's all we need to know
     __m256i illegals = _mm256_cmpgt_epi8(final.ymm0, final.ymm1);
     int mask = -1;
-    mask &= _mm256_testz_si256(split_test_mask256, illegals) | (_mm256_testc_si256(split_test_mask256, illegals) << 2);
+    mask &= _mm256_testz_si256(LO_HALVES_128_256, illegals) | (_mm256_testc_si256(LO_HALVES_128_256, illegals) << 2);
 
     __m256i finalDelta = _mm256_max_epi8(
             _mm256_sub_epi8(final.ymm0, _mm256_srli_si256(final.ymm1, 1)),
@@ -181,16 +181,16 @@ int getLegalDistCheckMaskRanged(struct hlp_solve_globals* globals, __m256i sorte
 }
 
 int getLegalDistCheckMaskPartial(struct hlp_solve_globals* globals, __m256i sortedYmm, int threshhold) {
-    __m256i final = _mm256_and_si256(sortedYmm, low_halves_mask256);
-    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), low_halves_mask256);
+    __m256i final = _mm256_and_si256(sortedYmm, LO_HALVES_4_256);
+    __m256i current = _mm256_and_si256(_mm256_srli_epi64(sortedYmm, 4), LO_HALVES_4_256);
 
     __m256i finalDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(final, 1), final));
     __m256i currentDelta = _mm256_abs_epi8(_mm256_sub_epi8(_mm256_srli_si256(current, 1), current));
 
     __m256i illegals = _mm256_and_si256(_mm256_cmpeq_epi8(currentDelta, _mm256_setzero_si256()), finalDelta);
-    illegals = _mm256_and_si256(illegals, low_15_bytes_mask256);
+    illegals = _mm256_and_si256(illegals, LOW_15_BYTES_256);
     int mask = -1;
-    mask &= _mm256_testz_si256(split_test_mask256, illegals) | (_mm256_testc_si256(split_test_mask256, illegals) << 2);
+    mask &= _mm256_testz_si256(LO_HALVES_128_256, illegals) | (_mm256_testc_si256(LO_HALVES_128_256, illegals) << 2);
 
     uint32_t separationsMask = _mm256_movemask_epi8(_mm256_cmpgt_epi8(finalDelta, currentDelta)) & 0x7fff7fff;
     mask &= (_popcnt32(separationsMask & 0xffff) <= threshhold) | ((_popcnt32(separationsMask >> 16) <= threshhold) << 2);
@@ -208,7 +208,7 @@ int batchApplyAndCheckExact(
     // this contains extra bits to overwrite the current value on dont care entries
     __m256i doubledGoal;
     if (globals->config.solve_type == HLP_SOLVE_TYPE_RANGED) 
-        doubledGoal = identity_permutation256;
+        doubledGoal = SHUFB_IDENTITY_256;
     else
         doubledGoal = _mm256_or_si256(globals->config.goal_min, globals->config.dont_care_mask);
 
@@ -276,13 +276,13 @@ int fastLastLayerSearch(struct hlp_solve_globals* globals, uint64_t input, struc
         quad.ymm0 = _mm256_or_si256(_mm256_cmpgt_epi8(globals->config.goal_min, quad.ymm0), _mm256_cmpgt_epi8(quad.ymm0, globals->config.goal_max));
         quad.ymm1 = _mm256_or_si256(_mm256_cmpgt_epi8(globals->config.goal_min, quad.ymm1), _mm256_cmpgt_epi8(quad.ymm1, globals->config.goal_max));
         // no need to apply globals->config.dont_care_mask, they already will always succeed anyways
-        if (i && _mm256_testnzc_si256(split_test_mask256, quad.ymm0) && _mm256_testnzc_si256(split_test_mask256, quad.ymm1)) continue;
+        if (i && _mm256_testnzc_si256(LO_HALVES_128_256, quad.ymm0) && _mm256_testnzc_si256(LO_HALVES_128_256, quad.ymm1)) continue;
 
         bool successes[] = {
-            _mm256_testz_si256(split_test_mask256, quad.ymm0),
-            _mm256_testz_si256(split_test_mask256, quad.ymm1),
-            _mm256_testc_si256(split_test_mask256, quad.ymm0),
-            _mm256_testc_si256(split_test_mask256, quad.ymm1)};
+            _mm256_testz_si256(LO_HALVES_128_256, quad.ymm0),
+            _mm256_testz_si256(LO_HALVES_128_256, quad.ymm1),
+            _mm256_testc_si256(LO_HALVES_128_256, quad.ymm0),
+            _mm256_testc_si256(LO_HALVES_128_256, quad.ymm1)};
 
         for (int j=0; j<4; j++) {
             if (!successes[j]) continue;
@@ -355,7 +355,7 @@ int testMap(struct hlp_solve_globals* globals, uint64_t map) {
     return _mm_testz_si128(_mm_or_si128(
                 _mm_cmpgt_epi8(_mm256_castsi256_si128(globals->config.goal_min), xmm),
                 _mm_cmpgt_epi8(xmm, _mm256_castsi256_si128(globals->config.goal_max))
-                ), uint_max128);
+                ), UINT128_MAX);
 }
 
 
@@ -424,9 +424,9 @@ int init(struct hlp_solve_globals* globals, hlp_request_t request) {
     globals->config.goal_min = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.mins)), 0x44);
     globals->config.goal_max = _mm256_permute4x64_epi64(_mm256_castsi128_si256(big_endian_uint_to_xmm(request.maxs)), 0x44);
 
-    globals->config.dont_care_mask = _mm256_cmpeq_epi8(_mm256_sub_epi8(globals->config.goal_max, globals->config.goal_min), low_halves_mask256);
+    globals->config.dont_care_mask = _mm256_cmpeq_epi8(_mm256_sub_epi8(globals->config.goal_max, globals->config.goal_min), LO_HALVES_4_256);
     globals->config.dont_care_count = _popcnt32(_mm_movemask_epi8(_mm256_castsi256_si128(globals->config.dont_care_mask)));
-    globals->config.dont_care_post_sort_perm = _mm256_min_epi8(identity_permutation256, _mm256_set1_epi8(15 - globals->config.dont_care_count));
+    globals->config.dont_care_post_sort_perm = _mm256_min_epi8(SHUFB_IDENTITY_256, _mm256_set1_epi8(15 - globals->config.dont_care_count));
 
     return 0;
 }
@@ -437,7 +437,7 @@ int singleSearchInner(struct hlp_solve_globals* globals, struct precomputed_hex_
 
     while (globals->config.current_bfs_depth <= maxDepth) {
         uint16_t* staged_branches = malloc(base_layer->next_layer_count * globals->config.current_bfs_depth * sizeof(uint16_t));
-        int success = dfs(globals, identity_permutation_packed64, 0, base_layer, staged_branches);
+        int success = dfs(globals, IDENTITY_PERM_PK64, 0, base_layer, staged_branches);
         free(staged_branches);
         if (success) {
             if (hlpSolveVerbosity >= 3) {
@@ -620,7 +620,7 @@ void hlpPrintSearch(char* map) {
             printf("result found, length %d", length);
             if (hlpSolveVerbosity > 2 || request.solveType != HLP_SOLVE_TYPE_EXACT) {
                 printf(" (");
-                printHlpMap(applyChain(identity_permutation_big_endian64, result, length));
+                printHlpMap(applyChain(IDENTITY_PERM_BE64, result, length));
                 printf(")");
             }
             printf(":  ");

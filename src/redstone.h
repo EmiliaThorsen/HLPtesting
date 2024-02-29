@@ -2,6 +2,7 @@
 #define REDSTONE_H
 #include <stdint.h>
 #include "arg_global.h"
+#include <immintrin.h>
 
 struct precomputed_hex_layer {
     uint64_t map;
@@ -19,7 +20,12 @@ struct precomputed_hex_layer {
  *      directly into another comparator)
  *      bbbb: second barrel value
  */
+extern __m128i hex_layer128(__m128i map, uint16_t config);
 extern uint64_t hex_layer64(uint64_t map, uint16_t config);
+
+extern uint32_t dbin_layer128(__m128i map, uint16_t config);
+extern uint32_t dbin_layer64(uint64_t map, uint16_t config);
+extern uint32_t dbin_layer_packed64(uint64_t map, uint16_t config);
 
 
 /* get precomputed layers
@@ -28,7 +34,7 @@ extern uint64_t hex_layer64(uint64_t map, uint16_t config);
  * layer, as given by the next_layers and next_layer_luts elements. this can be
  * followed recursively to always only check unique pairs of layers
  */
-extern struct precomputed_hex_layer* precompute_hex_layers(int group);
+extern struct precomputed_hex_layer* precompute_hex_layers(int group, int direction);
 
 /* free precomputed hex layers
  *
@@ -36,6 +42,8 @@ extern struct precomputed_hex_layer* precompute_hex_layers(int group);
  * case they are needed again. this function frees all of them.
  */
 extern void free_precomputed_hex_layers();
+
+uint64_t apply_hex_chain(uint64_t start, uint16_t* chain, int length);
 
 struct arg_settings_redstone {
     struct arg_settings_global* global;

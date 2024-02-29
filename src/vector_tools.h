@@ -171,5 +171,25 @@ static int get_group64(uint64_t x) {
     return _popcnt32(bit_feild);
 }
 
+static uint64_t reverse_movmask_64(uint8_t mask) {
+    return _pdep_u64(mask, BROADCAST_8x(8, 1)) * UINT8_MAX;
+}
+
+static __m128i reverse_movmask_128(uint16_t mask) {
+    return (__m128i) {
+        reverse_movmask_64(mask),
+        reverse_movmask_64(mask >> 8)
+    };
+}
+
+static __m256i reverse_movmask_256(uint32_t mask) {
+    return (__m256i) {
+        reverse_movmask_64(mask),
+        reverse_movmask_64(mask >> 8),
+        reverse_movmask_64(mask >> 16),
+        reverse_movmask_64(mask >> 24)
+    };
+}
+
 #endif
 

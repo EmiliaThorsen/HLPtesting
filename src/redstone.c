@@ -46,20 +46,21 @@ uint64_t hex_layer64(uint64_t start, uint16_t config) {
     return pack_xmm_to_uint(hex_layer128(unpack_uint_to_xmm(start), config));
 }
 
-struct precomputed_hex_layer* precomputed_hex_layer_history[16] = { 0 };
+struct precomputed_hex_layer* precomputed_hex_layer_history[32] = { 0 };
 
 int round_up(int n, int factor) {
     return ((n - 1) / factor + 1) * factor;
 }
 
 #define LAYER_COUNT_ESTIMATE 1024
-#define CONFIG_COUNT 16 * 16 * 6
+#define HEX_CONFIG_COUNT (16 * 16 * 6)
 #define MAP_ARRAY_ALIGNMENT 4
 
 //precompute of layers into lut, proceding layers deduplicated for lower branching
-struct precomputed_hex_layer* precompute_hex_layers(int group) {
-    if (precomputed_hex_layer_history[group - 1]) {
-        return precomputed_hex_layer_history[group - 1];
+struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
+    int history_index = group - 1 + 16 * (direction < 0);
+    if (precomputed_hex_layer_history[history_index]) {
+        return precomputed_hex_layer_history[history_index];
     }
 
     int layer_count = 0;
@@ -72,7 +73,7 @@ struct precomputed_hex_layer* precompute_hex_layers(int group) {
     if (verbosity >= 3) printf("starting layer precompute\n");
 
     // identify the unique first layers
-    for(int conf = 0; conf < CONFIG_COUNT; conf++) {
+    for(int conf = 0; conf < HEX_CONFIG_COUNT; conf++) {
         uint64_t output = hex_layer64(IDENTITY_PERM_PK64, conf);
         // skip if doesn't pass tests
         if (get_group64(output) < group) continue;
@@ -123,7 +124,9 @@ struct precomputed_hex_layer* precompute_hex_layers(int group) {
 
             // skip check on identity layer, it's already in the tree
             if (first_layer_i) {
-                uint64_t output = apply_mapping_packed64(first_layer->map, second_layer->map);
+                uint64_t output = direction < 0 ? 
+                    apply_mapping_packed64(second_layer->map, first_layer->map) :
+                    apply_mapping_packed64(first_layer->map, second_layer->map);
                 /* uint64_t output = hex_layer64(first_layer->map, second_layer->config); */
                 /* uint64_t output = hex_layer64(hex_layer64(identity_permutation_packed64, first_layer->config), second_layer->config); */
                 if (1)
@@ -169,7 +172,7 @@ struct precomputed_hex_layer* precompute_hex_layers(int group) {
         printf("layer precompute done in %.2fms\n", (double)(clock() - time_start) / CLOCKS_PER_SEC * 1000);
         printf("layers computed:%d, total next layers:%'ld\n", layer_count, next_layer_count - layer_count);
     }
-    precomputed_hex_layer_history[group - 1] = layers;
+    precomputed_hex_layer_history[history_index] = layers;
     return layers;
 }
 
@@ -183,6 +186,47 @@ void free_precomputed_hex_layers() {
     }
 }
 
+uint32_t dbin_layer128(__m128i input, uint16_t config) {
+    // unpack map and config
+    __m128i back1 = input;
+    __m128i side2 = input;
+
+    // unlike normal layer(), using ymms is easier
+    __m128i back2 = _mm_set1_epi8(config);
+    __m128i side1 = _mm_and_si128(_mm_srli_epi64(back2, 4), LO_HALVES_4_128);
+    back2 = _mm_and_si128(back2, LO_HALVES_4_128);
+
+    __m256i backs = _mm256_permute2x128_si256(_mm256_castsi128_si256(back1), _mm256_castsi128_si256(back2), 0x20);
+    __m256i sides = _mm256_permute2x128_si256(_mm256_castsi128_si256(side1), _mm256_castsi128_si256(side2), 0x20);
+
+    // shift left then arith right so bit we shift to msb gets cast to whole register
+    const __m256i mode_shifts = {22, 22, 23, 23}; // 31 - 8 - n
+    __m256i modes = _mm256_srai_epi32(_mm256_sllv_epi64(_mm256_set1_epi32(config), mode_shifts), 31);
+
+    // apply the comparators
+    __m256i outputs = _mm256_andnot_si256(_mm256_cmpgt_epi8(sides, backs), _mm256_sub_epi8(backs, _mm256_and_si256(sides, modes)));
+
+    // mingle together
+    outputs = _mm256_max_epi8(outputs, _mm256_add_epi8(_mm256_permute4x64_epi64(outputs, PERMQ_REV_2x128_256), UINT256_MAX));
+
+    // get which ones are currently at least 1
+    return _mm256_movemask_epi8(_mm256_cmpgt_epi8(outputs, _mm256_setzero_si256()));
+}
+
+uint32_t dbin_layer64(uint64_t input, uint16_t config) {
+    return dbin_layer128(little_endian_uint_to_xmm(input), config);
+}
+
+uint32_t dbin_layer_packed64(uint64_t input, uint16_t config) {
+    return dbin_layer128(unpack_uint_to_xmm(input), config);
+}
+
+uint64_t apply_hex_chain(uint64_t start, uint16_t* chain, int length) {
+    for (int i = 0; i < length; i++) {
+        start = hex_layer64(start, chain[i]);
+    }
+    return start;
+}
 
 
 enum LONG_OPTIONS {

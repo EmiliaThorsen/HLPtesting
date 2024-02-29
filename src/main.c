@@ -10,13 +10,16 @@
 #include "solver/hlp_solve.h"
 #include "command/cat.h"
 #include "command/hex.h"
+#include "command/dbin_command.h"
 #include "search/hlp_random.h"
+#include "search/dbin_random.h"
 
 union arg_settings_sub {
     struct arg_settings_solver_hex solver_hex;
     struct arg_settings_command_hex command_hex;
     struct arg_settings_command_cat command_cat;
     struct arg_settings_search_hlp_random search_hlp_random;
+    struct arg_settings_search_dbin_random search_dbin_random;
 };
 
 struct subcommand_entry {
@@ -55,7 +58,9 @@ error_t process_subcommand(const char* name, struct argp_state* state, struct ar
 const struct subcommand_entry subcommand_entries[] = {
     { "hex", &argp_command_hex, offsetof(struct arg_settings_command_hex, global) },
     { "hlp", &argp_command_hex, offsetof(struct arg_settings_command_hex, global) },
+    { "2bin", &argp_command_dbin, offsetof(struct arg_settings_command_dbin, global) },
     { "search-hlp-random", &argp_search_hlp_random, offsetof(struct arg_settings_search_hlp_random, global) },
+    { "search-2bin-random", &argp_search_dbin_random, offsetof(struct arg_settings_search_dbin_random, global) },
 };
 
 static const char doc_global[] =
@@ -63,6 +68,7 @@ static const char doc_global[] =
 "\v"
 "Supported subcommands:\n"
 "  hex, hlp     Find a solution for the vanilla hex layer problem\n"
+"  2bin         Find a solution for the dual binary problem\n"
 "  search-*     Automated searchers\n"
 "  search       List available searchers\n"
 "note that global options must be provided BEFORE the subcommand\n"
@@ -71,6 +77,7 @@ static const char doc_global[] =
 static const char doc_search[] =
 "Searchers available:\n"
 "  search-hlp-random\n"
+"  search-2bin-random\n"
 ;
 
 static const struct argp_option options_global[] = {

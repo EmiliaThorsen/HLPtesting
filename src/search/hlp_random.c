@@ -63,7 +63,7 @@ void randomize_map(char* dest, int group) {
     }
 }
 
-void random_search(int count, int group) {
+static void random_search(int count, int group) {
     for (int i=0; i<count; i++) {
         char map[17];
         randomize_map(map, group);

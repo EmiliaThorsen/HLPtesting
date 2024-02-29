@@ -3,6 +3,8 @@
 #include "../arg_global.h"
 #include "../solver/hlp_solve.h"
 
+uint64_t rand_uint64();
+
 struct arg_settings_search_hlp_random {
     struct arg_settings_global* global;
     int trials;

@@ -15,18 +15,6 @@ struct hlp_request {
     enum solve_config_error error;
 };
 
-struct cache_entry {
-    uint64_t map;
-    uint32_t trial;
-    uint8_t depth;
-};
-
-struct cache {
-    struct cache_entry* array;
-    uint64_t mask;
-    uint32_t global_trial;
-};
-
 // the start position, or at least the pretty one that can be used outside the solver
 extern const uint64_t hlp_start_pos;
 
@@ -47,12 +35,6 @@ void print_hlp_request(struct hlp_request request);
 
 void print_hlp_map(uint64_t map);
 
-/* safely set the cache size (changes will apply on next search)
- * cache will have 2 ** size entries, with 16 byte entries
- * default: 22
- */
-void hlp_set_cache_size(int size);
-
 // access the layer information
 uint16_t get_layer_conf(int group, int layer_id);
 uint16_t get_next_valid_layer_id(int group, int prev_layer_id, int index);
@@ -60,11 +42,6 @@ uint16_t get_next_valid_layer_size(int group, int layer_id);
 
 void hlp_print_search(char* map);
 
-
-// cache things, should refactor
-void cache_init(struct cache* cache);
-void invalidate_cache(struct cache* cache);
-int cache_check(struct cache* cache, uint64_t output, int depth);
 
 uint64_t apply_chain(uint64_t start, uint16_t* chain, int length);
 

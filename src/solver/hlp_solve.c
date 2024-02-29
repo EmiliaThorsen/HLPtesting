@@ -11,6 +11,7 @@
 #include "../bitonic_sort.h"
 #include "../vector_tools.h"
 #include "../redstone.h"
+#include "../cache.h"
 
 struct hlp_solve_globals {
     struct __config__ {
@@ -26,14 +27,9 @@ struct hlp_solve_globals {
 
     struct __stats__ {
         long total_iterations;
-        long cache_same_depth_hits, cache_dif_layer_hits, cache_misses, cache_bucket_util, cache_total_checks;
         clock_t start_time;
     } stats;
-
-    struct cache cache;
 };
-
-int cache_size = 22;
 
 static int verbosity = 1;
 
@@ -289,40 +285,6 @@ static int fast_last_layer_search(struct hlp_solve_globals* globals, uint64_t in
     return 0;
 }
 
-int cache_check(struct cache* cache, uint64_t output, int depth) {
-    uint32_t pos = _mm_crc32_u32(_mm_crc32_u32(0, output & UINT32_MAX), output >> 32) & cache->mask;
-    struct cache_entry* entry = cache->array + pos;
-    //globals->stats.cache_total_checks++;
-    if (entry->map == output && entry->depth <= depth && entry->trial == cache->global_trial) {
-        //if (entry->depth == depth) globals->stats.cache_same_depth_hits++;
-        //else globals->stats.cache_dif_layer_hits++;
-        return 1;
-    }
-
-    //if (entry->trial == globals->cache.global_trial && entry->map != output) globals->stats.cache_misses++;
-    //else globals->stats.cache_bucket_util++;
-
-    entry->map = output;
-    entry->depth = depth;
-    entry->trial = cache->global_trial;
-
-    return 0;
-}
-
-void invalidate_cache(struct cache* cache) {
-    cache->global_trial++;
-    // clear the cache if we somehow hit overflow
-    if (!cache->global_trial) {
-        for (int i = 0; i <= cache->mask; i++) {
-            cache->array[i].map = 0;
-            cache->array[i].depth = 0;
-            cache->array[i].trial = 0;
-        }
-        // trial 0 should always mean blank
-        cache->global_trial++;
-    }
-}
-
 // the most number of separations that can be found in the distance check before it prunes
 static int get_dist_threshold(struct hlp_solve_globals* globals, int remaining_layers) {
     if (globals->config.accuracy == ACCURACY_REDUCED) return remaining_layers - (remaining_layers > 2);
@@ -371,7 +333,7 @@ static int dfs(struct hlp_solve_globals* globals, uint64_t input, int depth, str
         uint64_t output = apply_mapping_packed64(input, next_layer->map);
 
         //cache check
-        if(cache_check(&globals->cache, output, depth)) continue;
+        if(cache_check(&main_cache, output, depth)) continue;
 
         //call next layers
         if(dfs(globals, output, depth + 1, next_layer, staged_branches + layer->next_layer_count)) {
@@ -384,19 +346,8 @@ static int dfs(struct hlp_solve_globals* globals, uint64_t input, int depth, str
     return 0;
 }
 
-static struct cache global_cache = {0};
-
-void cache_init(struct cache* cache) {
-    if (!cache->array) {
-        if (!global_cache.array) global_cache.array = calloc((1 << cache_size), sizeof(struct cache_entry));
-        cache->array = global_cache.array;
-        cache->global_trial = global_cache.global_trial;
-        cache->mask = (1 << cache_size) - 1;
-    }
-}
-
 static int init(struct hlp_solve_globals* globals, struct hlp_request request) {
-    cache_init(&globals->cache);
+    cache_init(&main_cache);
     globals->stats.start_time = clock();
     globals->config.solve_type = request.solve_type;
     globals->stats.total_iterations = 0;
@@ -435,16 +386,11 @@ int single_search_inner(struct hlp_solve_globals* globals, struct precomputed_he
             if (verbosity >= 3) {
                 printf("solution found at %.2fms\n", (double)(clock() - globals->stats.start_time) / CLOCKS_PER_SEC * 1000);
                 printf("total iter over all: %'ld\n", globals->stats.total_iterations);
-                printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n",
-                        globals->stats.cache_total_checks,
-                        globals->stats.cache_same_depth_hits,
-                        globals->stats.cache_dif_layer_hits,
-                        globals->stats.cache_misses,
-                        globals->stats.cache_bucket_util);
+                cache_print_stats(&main_cache);
             }
             return globals->output.chain_length;
         }
-        invalidate_cache(&globals->cache);
+        invalidate_cache(&main_cache);
         globals->config.current_bfs_depth++;
 
         if (verbosity < 2) continue;
@@ -455,12 +401,7 @@ int single_search_inner(struct hlp_solve_globals* globals, struct precomputed_he
     }
     if (verbosity >= 2) {
         printf("failed to beat depth\n");
-        printf("cache checks: %'ld; same depth hits: %'ld; dif layer hits: %'ld; misses: %'ld; bucket utilization: %'ld\n",
-                globals->stats.cache_total_checks,
-                globals->stats.cache_same_depth_hits,
-                globals->stats.cache_dif_layer_hits,
-                globals->stats.cache_misses,
-                globals->stats.cache_bucket_util);
+        cache_print_stats(&main_cache);
     }
     return max_depth + 1;
 }
@@ -511,10 +452,6 @@ int solve(struct hlp_request request, uint16_t* output_chain, int max_depth, enu
     if (verbosity >= 2) printf("total iter across searches: %'ld\n", total_iter + globals.stats.total_iterations);
     if (result > max_depth) return requested_max_depth + 1;
     return result;
-}
-
-void hlp_set_cache_size(int size) {
-    cache_size = size;
 }
 
 void print_chain(uint16_t* chain, int length) {
@@ -606,7 +543,7 @@ enum LONG_OPTIONS {
 static const struct argp_option options[] = {
     { "fast", 'f', 0, 0, "Equivilant to --accuracy -1" },
     { "perfect", 'p', 0, 0, "Equivilant to --accuracy 2" },
-    { "max-length", LONG_OPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
+    { "max-layers", LONG_OPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long" },
     { "accuracy", LONG_OPTION_ACCURACY, "LEVEL", 0, "Set search accuracy from -1 to 2, 0 being normal, 2 being perfect" },
     { "cache", LONG_OPTION_CACHE_SIZE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
     { 0 }
@@ -630,7 +567,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
             global_max_depth = atoi(arg);
             break;
         case LONG_OPTION_CACHE_SIZE:
-            hlp_set_cache_size(atoi(arg) - 4);
+            main_cache.size_log = (atoi(arg) - 4);
             break;
         case ARGP_KEY_INIT:
             global_accuracy = ACCURACY_NORMAL;

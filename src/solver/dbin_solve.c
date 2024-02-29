@@ -3,7 +3,7 @@
 #include "../aa_tree.h"
 #include "../redstone.h"
 #include "../vector_tools.h"
-#include "hlp_solve.h" // for cache
+#include "../cache.h"
 
 struct precomputed_dbin_layer {
     uint32_t map;
@@ -15,8 +15,7 @@ struct dbin_solve_globals {
         int current_bfs_depth;
         int group;
         int unique_dbin_layers;
-        uint8_t* prune_table_low;
-        uint8_t* prune_table_high;
+        uint8_t* prune_table;
         struct precomputed_dbin_layer* dbin_layers;
     } config;
     struct __output__ {
@@ -25,14 +24,13 @@ struct dbin_solve_globals {
     } output;
     struct __stats__ {
     } stats;
-    
-    struct cache cache;
 };
 
 // array of values if you look at the index in binary, and read it directly as a ternary number
 int* bct_half_values = NULL;
 
 static int verbosity;
+static int global_max_depth;
 
 /* BCT Increment
  * add 1 to number in binary coded ternary
@@ -297,11 +295,11 @@ static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer*
         // legality check
         if (next_remaining_map & (next_remaining_map >> 32)) continue;
         // prune table check
-        if (uint4_array_get(globals->config.prune_table_low, get_ternary_index(next_remaining_map&UINT16_MAX, (next_remaining_map >> 32) & UINT16_MAX)) > remaining_depth) continue;
-        if (uint4_array_get(globals->config.prune_table_high, get_ternary_index(next_remaining_map >> 16, next_remaining_map >> 48)) > remaining_depth) continue;
+        if (uint4_array_get(globals->config.prune_table, get_ternary_index(next_remaining_map, (next_remaining_map >> 32))) > remaining_depth) continue;
+        if (uint4_array_get(globals->config.prune_table, get_ternary_index(next_remaining_map >> 16, next_remaining_map >> 48)) > remaining_depth) continue;
 
         // passed, check further
-        if (cache_check(&globals->cache, next_remaining_map, 99 - remaining_depth)) continue;
+        if (cache_check(&main_cache, next_remaining_map, 99 - remaining_depth)) continue;
         
         int success = dfs(globals, next_layer, next_remaining_map, remaining_depth - 1);
         if (success) {
@@ -323,11 +321,9 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
     globals.config.group = get_dbin_exact_group(map);
     globals.output.chain = output_chain;
     
-    
-    cache_init(&globals.cache);
+    cache_init(&main_cache);
 
-    globals.config.prune_table_low = get_prune_table(globals.config.group, 0);
-    globals.config.prune_table_high = globals.config.prune_table_low;// get_prune_table(globals.config.group, 1);
+    globals.config.prune_table = get_prune_table(globals.config.group, 0);
 
     struct precomputed_dbin_layer dbin_layers[DBIN_CONFIG_COUNT];
     globals.config.dbin_layers = dbin_layers;
@@ -343,10 +339,10 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
         if (dfs(&globals, identity_layer, partial_map, depth)) {
             return depth + 1;
         }
-        invalidate_cache(&globals.cache);
+        invalidate_cache(&main_cache);
     }
-    free(globals.config.prune_table_low);
-    free(globals.config.prune_table_high);
+    free(globals.config.prune_table);
+    if (verbosity > 2) cache_print_stats(&main_cache);
     return max_depth - 1;
 }
 
@@ -366,16 +362,25 @@ void dbin_print_solve(uint32_t map) {
 }
 
 enum LONG_OPTIONS {
-    EMPTY
+    LONG_OPTION_MAX_DEPTH = 1000,
+    LONG_OPTION_CACHE_SIZE
 };
 
 static const struct argp_option options[] = {
+    { "max-layers", LONG_OPTION_MAX_DEPTH, "N", 0, "Limit results to chains up to N layers long, including the final 2bin layer" },
+    { "cache", LONG_OPTION_CACHE_SIZE, "N", 0, "Set the cache size to 2**N bytes. default: 26 (64MB)" },
     { 0 }
 };
 
 static error_t parse_opt(int key, char* arg, struct argp_state *state) {
     struct arg_settings_solver_dbin* settings = state->input;
     switch (key) {
+        case LONG_OPTION_MAX_DEPTH:
+            global_max_depth = atoi(arg);
+            break;
+        case LONG_OPTION_CACHE_SIZE:
+            main_cache.size_log = (atoi(arg) - 4);
+            break;
         case ARGP_KEY_SUCCESS:
             verbosity = settings->global->verbosity;
             break;

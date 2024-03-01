@@ -4,6 +4,8 @@
 #include "arg_global.h"
 #include <immintrin.h>
 
+#define HEX_CONFIG_COUNT (16 * 16 * 6)
+
 struct precomputed_hex_layer {
     uint64_t map;
     uint64_t* next_layer_luts;

@@ -21,6 +21,8 @@ int aa_delete(aa * tree, void *data, int (*dup) (void *orig, void *data),
               void (*del) (void *));
 /* NULL on error or not found */
 void *aa_find(aa * tree, void *data);
+/* returns length */
+int aa_to_array(aa * tree, void *array, size_t size);
 /* 0 on no error, 1 on no tree, 2 on bad trav (not one of TRAV_IN, TRAV_POST, TRAV_PRE) */
 int aa_traverse(aa * tree, void *(*func) (void *data), trav t);
 /* NULL on error */

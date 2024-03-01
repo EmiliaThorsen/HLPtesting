@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <setjmp.h>
+#include <string.h>
 #include "aa_tree.h"
 
 typedef int (*ftype) (void *, void *);
@@ -251,9 +252,10 @@ static void *find(struct node *t, void *data, ftype comp)
         return NULL;
     }
 
-    if (comp(data, t->data) == -1) {
+    int cmp_result = comp(data, t->data);
+    if (cmp_result == -1) {
         return find(t->left, data, comp);
-    } else if (comp(data, t->data) == 1) {
+    } else if (cmp_result == 1) {
         return find(t->right, data, comp);
     } else {
         return t->data;
@@ -309,6 +311,25 @@ static void inorder(struct node *node, void *(*func) (void *data))
 
     if (node->right)
         inorder(node->right, func);
+}
+
+static void * to_array(struct node * node, void *start, size_t size) {
+    if (node == NULL) {
+        return start;
+    }
+
+    start = to_array(node->left, start, size);
+    memcpy(start, node->data, size);
+    start += size;
+    return to_array(node->right, start, size);
+}
+
+int aa_to_array(aa * tree, void *array, size_t size) {
+    if (tree == NULL) {
+        return 0;
+    }
+
+    return (to_array(tree->root, array, size) - array) / size;
 }
 
 int aa_traverse(aa * tree, void *(*func) (void *data), trav t)

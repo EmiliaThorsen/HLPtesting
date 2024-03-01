@@ -7,7 +7,8 @@
 
 struct precomputed_dbin_layer {
     uint32_t map;
-    uint16_t config;
+    uint16_t config_dbin;
+    uint16_t config_prehex;
 };
 
 struct dbin_solve_globals {
@@ -23,6 +24,7 @@ struct dbin_solve_globals {
         int length;
     } output;
     struct __stats__ {
+        uint64_t iterations, final_bsearches;
     } stats;
 };
 
@@ -67,10 +69,6 @@ uint32_t dbin_exact_prepend_map_packed64(uint64_t map, uint32_t state) {
     return _mm256_movemask_epi8(_mm256_shuffle_epi8(reverse_movmask_256(state), DOUBLE_XMM(unpack_uint_to_xmm(map))));
 }
 
-uint16_t dbin_exact_prepend_half_map_packed64(uint64_t map, uint16_t state, int half) {
-    return _pext_u32(dbin_exact_prepend_map_packed64(map, _pdep_u32(state, LO_HALVES_8_64 << (half * 8))), LO_HALVES_8_64 << (half * 8));
-}
-
 /* partial dbin format: (bit 1 0's) (bit 2 0's) (bit 1 1's) (bit 2 1's)
  * we have a 1 for every bit that needs to be that specific value
  */
@@ -96,8 +94,8 @@ int get_dbin_exact_group(uint32_t mask) {
 #define DBIN_CONFIG_COUNT (16 * 16 * 4)
 #define PRETABLE_SIZE (UINT16_MAX + 1)
 #define PRUNE_TABLE_ENTRY_COUNT 43046721 // 3 ** 16
-#define PRUNE_TABLE_BYTES PRUNE_TABLE_ENTRY_COUNT
-//#define PRUNE_TABLE_BYTES (PRUNE_TABLE_ENTRY_COUNT / 2 + 1) 
+/* #define PRUNE_TABLE_BYTES PRUNE_TABLE_ENTRY_COUNT */
+#define PRUNE_TABLE_BYTES (PRUNE_TABLE_ENTRY_COUNT / 2 + 1) 
 
 int in_list(struct precomputed_dbin_layer* array, int length, uint32_t value) {
     for (int i = 0; i < length; i++) { 
@@ -107,40 +105,72 @@ int in_list(struct precomputed_dbin_layer* array, int length, uint32_t value) {
 }
 
 static int cmp_dbin_layer(void* a, void* b) {
-    const struct precomputed_dbin_layer* first = a;
-    const struct precomputed_dbin_layer* second = a;
-    return first->map - second->map;
+    struct precomputed_dbin_layer* first = a;
+    struct precomputed_dbin_layer* second = b;
+    return int64_cmp_cast((int64_t) first->map - second->map);
 }
 
-int precompute_dbin_layers(struct precomputed_dbin_layer* dest, int group) {
+static int cmp_dbin_remainder(const void* a, const void *b) {
+    const uint64_t* key = a;
+    const struct precomputed_dbin_layer* layer = b;
+    return int64_cmp_cast(((*key >> 32) & ~(layer->map)) - (*key & UINT32_MAX & layer->map));
+}
+
+static int precompute_dbin_layers(struct precomputed_dbin_layer** dest, int group) {
     aa* unique_layers_tree = aa_new(cmp_dbin_layer);
-    struct precomputed_dbin_layer* tree_data = malloc(DBIN_CONFIG_COUNT * sizeof(struct precomputed_dbin_layer));
+    struct precomputed_dbin_layer* dbin_layers = malloc(DBIN_CONFIG_COUNT * sizeof(struct precomputed_dbin_layer));
     
+    // get the first layers
     int layer_count = 0;
     for (int config = 0; config < DBIN_CONFIG_COUNT; config++) {
-        uint32_t output = dbin_layer128(SHUFB_IDENTITY_128, config);
-        if (aa_find(unique_layers_tree, &output)) continue;
+        uint32_t table = dbin_layer128(SHUFB_IDENTITY_128, config);
+        dbin_layers[layer_count] = (struct precomputed_dbin_layer) { table, config, 0 };
 
-        tree_data[layer_count] = (struct precomputed_dbin_layer) { output, config };
-        aa_add(unique_layers_tree, tree_data + layer_count, NULL);
-        dest[layer_count] = (struct precomputed_dbin_layer) { output, config };
+        if (aa_find(unique_layers_tree, dbin_layers + layer_count)) continue;
+
+        aa_add(unique_layers_tree, dbin_layers + layer_count, NULL);
         layer_count++;
     }
-    if (verbosity > 3) {
-        printf("%d 2bin layers\n", layer_count);
+
+    *dest = malloc(layer_count * sizeof(struct precomputed_dbin_layer));
+    aa_to_array(unique_layers_tree, *dest, sizeof(struct precomputed_dbin_layer));
+
+    struct precomputed_hex_layer* hex_layers = precompute_hex_layers(group, 0);
+    struct precomputed_dbin_layer* dual_layer_data = malloc(layer_count * hex_layers->next_layer_count * sizeof(struct precomputed_dbin_layer));
+
+    // get pairs of layers
+    int two_layer_count = 0;
+    for (struct precomputed_hex_layer** hex_layer = hex_layers->next_layers; hex_layer < hex_layers->next_layers + hex_layers->next_layer_count; hex_layer++) {
+        for (struct precomputed_dbin_layer* dbin_layer = dbin_layers; dbin_layer < dbin_layers + layer_count; dbin_layer++) {
+            uint32_t table = dbin_exact_prepend_map_packed64((*hex_layer)->map, dbin_layer->map);
+            dual_layer_data[two_layer_count] = (struct precomputed_dbin_layer) { table, dbin_layer->config_dbin, (*hex_layer)->config };
+
+            if (aa_find(unique_layers_tree, dual_layer_data + two_layer_count)) continue;
+
+            aa_add(unique_layers_tree, dual_layer_data + two_layer_count, NULL);
+            two_layer_count++;
+        }
     }
+
+    if (verbosity > 2) {
+        printf("final layer precompute finished for group %d\n%d 2bin layers; %'d hex + 2bin layer pairs\n", group, layer_count, two_layer_count);
+    }
+
+    // include both 1 and 2 layer endings
+    *dest = malloc((two_layer_count + layer_count) * sizeof(struct precomputed_dbin_layer));
+    aa_to_array(unique_layers_tree, *dest, sizeof(struct precomputed_dbin_layer));
+
+    free(dbin_layers);
+    free(dual_layer_data);
     aa_free(unique_layers_tree);
-    free(tree_data);
-    return layer_count;
+
+    return layer_count + two_layer_count;
 }
 
 /*
  * create the prune table, combined for both bits as they are nearly identical.
  * the only difference is that on group < 4, bit 2 can't actually do 0111... in
  * a single dbin layer.
- */
-
-/* ignore the above. create two prune tables, one for the low signal strengths and one for the high signal strengths
  */
 uint8_t* get_prune_table(int group, int offset) {
     struct precomputed_hex_layer* hex_layers = precompute_hex_layers(group, -1);
@@ -160,13 +190,6 @@ uint8_t* get_prune_table(int group, int offset) {
     // fill with unassigned values
     for (int i = 0; i < PRETABLE_SIZE; i++) pretable[i] = -1;
 
-#if 0
-    for (int config = 0; config < DBIN_CONFIG_COUNT; config++) {
-        int map = _pext_u32(dbin_layer128(SHUFB_IDENTITY_128, config), LO_HALVES_8_64 << (offset*8));
-        pretable[map] = 0;
-    }
-#endif
-#if 1
     // fill the distance 0 parts, any index whos binary representation fits the regex /1*0*1*/
     // slight amount of redundancy, not worth complicating
     for (int i = 0; i < 17; i++) {
@@ -189,7 +212,6 @@ uint8_t* get_prune_table(int group, int offset) {
             pretable[UINT16_MAX & ~(1 << i)] = 15;
         }
     }
-#endif
 
     // fill in the rest of the pretable
     for (int search_distance = 0; ; search_distance++) {
@@ -280,25 +302,26 @@ int check_dbin_partial(uint32_t exact, uint64_t partial) {
     return 1;
 }
 
-static int check_last_layer(struct dbin_solve_globals* globals, uint64_t remaining_map) {
-    // check to see if both can be satisfied at once
-    for (int i = 0; i < globals->config.unique_dbin_layers; i++) {
-        uint32_t final_layer_map = globals->config.dbin_layers[i].map;
-        if (!check_dbin_partial(final_layer_map, remaining_map)) continue;
-        // found
-        if (globals->output.chain != NULL)
-            globals->output.chain[globals->config.current_bfs_depth] = globals->config.dbin_layers[i].config;
+static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer* layer, uint64_t remaining_map, int remaining_depth) {
+    if (remaining_depth <= 1) {
+        globals->stats.final_bsearches++;
+        struct precomputed_dbin_layer* pair = bsearch(&remaining_map, globals->config.dbin_layers, globals->config.unique_dbin_layers, sizeof(struct precomputed_dbin_layer), cmp_dbin_remainder);
+        if (pair == NULL) return 0;
 
-        if (verbosity > 3) printf("%03x: %08x\n", globals->config.dbin_layers[i].config, final_layer_map);
+        if (globals->output.chain != NULL) {
+            uint16_t* cursor = globals->output.chain + globals->config.current_bfs_depth;
+            *cursor = pair->config_dbin;
+            if (remaining_depth == 1) {
+                *(cursor - 1) = pair->config_prehex;
+            }
+        }
+
+        if (verbosity > 3) printf("%03x: %08x\n", pair->config_dbin, pair->map);
         return 1;
     }
-    return 0;
-}
-
-static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer* layer, uint64_t remaining_map, int remaining_depth) {
-    if (remaining_depth == 0) return check_last_layer(globals, remaining_map);
 
     for (int i = 0; i < layer->next_layer_count; i++) {
+        globals->stats.iterations++;
         struct precomputed_hex_layer* next_layer = layer->next_layers[i];
         uint64_t next_remaining_map = dbin_partial_unprepend_map_packed64(next_layer->map, remaining_map);
         // legality check
@@ -332,12 +355,9 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
     
     cache_init(&main_cache);
 
+    globals.config.unique_dbin_layers = precompute_dbin_layers(&globals.config.dbin_layers, globals.config.group);
+
     globals.config.prune_table = get_prune_table(globals.config.group, 0);
-
-    struct precomputed_dbin_layer dbin_layers[DBIN_CONFIG_COUNT];
-    globals.config.dbin_layers = dbin_layers;
-    globals.config.unique_dbin_layers = precompute_dbin_layers(dbin_layers, globals.config.group);
-
     struct precomputed_hex_layer* identity_layer = precompute_hex_layers(globals.config.group, -1);
 
     uint64_t partial_map = (uint64_t) map << 32 | (map ^ UINT32_MAX);
@@ -346,6 +366,10 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
         if (verbosity > 1) printf("checking depth %d\n", depth);
         globals.config.current_bfs_depth = depth;
         if (dfs(&globals, identity_layer, partial_map, depth)) {
+            if (verbosity > 2) {
+                printf("iterations: %'ld normal nodes; %'ld endpoint b-searches\n", globals.stats.iterations, globals.stats.final_bsearches);
+                cache_print_stats(&main_cache);
+            }
             return depth + 1;
         }
         invalidate_cache(&main_cache);
@@ -389,6 +413,9 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
             break;
         case LONG_OPTION_CACHE_SIZE:
             main_cache.size_log = (atoi(arg) - 4);
+            break;
+        case ARGP_KEY_INIT:
+            main_cache.size_log = 22;
             break;
         case ARGP_KEY_SUCCESS:
             verbosity = settings->global->verbosity;

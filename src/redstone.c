@@ -53,7 +53,6 @@ int round_up(int n, int factor) {
 }
 
 #define LAYER_COUNT_ESTIMATE 1024
-#define HEX_CONFIG_COUNT (16 * 16 * 6)
 #define MAP_ARRAY_ALIGNMENT 4
 
 //precompute of layers into lut, proceding layers deduplicated for lower branching

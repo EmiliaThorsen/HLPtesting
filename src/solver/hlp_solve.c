@@ -572,6 +572,7 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
         case ARGP_KEY_INIT:
             global_accuracy = ACCURACY_NORMAL;
             global_max_depth = 31;
+            main_cache.size_log = 22;
             settings->settings_redstone.global = settings->global;
             state->child_inputs[0] = &settings->settings_redstone;
             break;

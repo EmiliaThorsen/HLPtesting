@@ -66,8 +66,10 @@ struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
     int layer_count = 0;
     uint16_t* layer_configs_tmp = malloc(LAYER_COUNT_ESTIMATE * sizeof(uint16_t));
 
-    int64_t flag;
-    aatree_node* unique_next_layers_tree = aa_tree_insert(IDENTITY_PERM_PK64, NULL, &flag);
+    aa* unique_next_layers_tree = aa_new(cmp_int64);
+    uint64_t* tree_data = malloc(LAYER_COUNT_ESTIMATE * sizeof(uint64_t));
+    uint64_t identity = IDENTITY_PERM_PK64;
+    aa_add(unique_next_layers_tree, &identity, NULL);
 
     clock_t time_start = clock();
     if (verbosity >= 3) printf("starting layer precompute\n");
@@ -77,15 +79,16 @@ struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
         uint64_t output = hex_layer64(IDENTITY_PERM_PK64, conf);
         // skip if doesn't pass tests
         if (get_group64(output) < group) continue;
-        if (aa_tree_search(unique_next_layers_tree, output)) continue;
-        // if (output == identity_permutation_packed64) continue; // this should be covered by the tree
-        /* printf("%03x: %016lx\n", conf, big_endian_xmm_to_uint(big_endian_uint_to_xmm(big_endian_xmm_to_uint(unpack_uint_to_xmm(output))))); */
+        if (aa_find(unique_next_layers_tree, &output)) continue;
 
         // passed, add it
-        unique_next_layers_tree = aa_tree_insert(output, unique_next_layers_tree, &flag);
+        tree_data[layer_count] = output;
+        aa_add(unique_next_layers_tree, tree_data + layer_count, NULL);
         layer_configs_tmp[layer_count] = conf;
         layer_count++;
     }
+    free(tree_data);
+    aa_free(unique_next_layers_tree);
 
     // now set up the array of layers
     // first is always identity, ie the first layer
@@ -99,11 +102,10 @@ struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
     }
     free(layer_configs_tmp); // no longer needed
 
-    /*
-    for (int i = 0; i < layer_count + 1; i++) {
-        printf("%03x: %016lx\n", layers[i].config, big_endian_xmm_to_uint(unpack_uint_to_xmm(layers[i].map)));
-    }
-    */
+    // need to re set up tree data to allocate new space, realloc wont work
+    tree_data = malloc((layer_count + 1) * layer_count * sizeof(uint64_t));
+    unique_next_layers_tree = aa_new(cmp_int64);
+    aa_add(unique_next_layers_tree, &identity, NULL);
 
     int next_layer_count = 0;
     int map_spaces_needed = 0;
@@ -122,20 +124,14 @@ struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
         for (int second_layer_i = 1; second_layer_i < layer_count + 1; second_layer_i++) {
             struct precomputed_hex_layer* second_layer = layers + second_layer_i;
 
-            // skip check on identity layer, it's already in the tree
-            if (first_layer_i) {
-                uint64_t output = direction < 0 ? 
-                    apply_mapping_packed64(second_layer->map, first_layer->map) :
-                    apply_mapping_packed64(first_layer->map, second_layer->map);
-                /* uint64_t output = hex_layer64(first_layer->map, second_layer->config); */
-                /* uint64_t output = hex_layer64(hex_layer64(identity_permutation_packed64, first_layer->config), second_layer->config); */
-                if (1)
-                    if (get_group64(output) < group) continue;
-                if (1) {
-                    if (aa_tree_search(unique_next_layers_tree, output)) continue;
-                    unique_next_layers_tree = aa_tree_insert(output, unique_next_layers_tree, &flag);
-                }
-            }
+            uint64_t output = direction < 0 ? 
+                apply_mapping_packed64(second_layer->map, first_layer->map) :
+                apply_mapping_packed64(first_layer->map, second_layer->map);
+            if (get_group64(output) < group) continue;
+
+            if (aa_find(unique_next_layers_tree, &output)) continue;
+            tree_data[next_layer_count] = output;
+            aa_add(unique_next_layers_tree, tree_data + next_layer_count, NULL);
 
             next_layer_indices[next_layer_count] = second_layer_i;
             next_layer_count++;
@@ -143,10 +139,10 @@ struct precomputed_hex_layer* precompute_hex_layers(int group, int direction) {
         }
         // the maps require certain alignment to ensure they don't overlap, as
         // they are expected to be handled in bulk with vector processing
-        /* map_spaces_needed += first_layer->next_layer_count + 32; */ 
         map_spaces_needed += round_up(first_layer->next_layer_count, MAP_ARRAY_ALIGNMENT);
     }
-    aa_tree_free(unique_next_layers_tree);
+    aa_free(unique_next_layers_tree);
+    free(tree_data);
 
     // fill the next layer data
     // both of these will just be one big block containing multiple arrays

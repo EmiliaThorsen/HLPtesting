@@ -106,22 +106,31 @@ int in_list(struct precomputed_dbin_layer* array, int length, uint32_t value) {
     return 0;
 }
 
+static int cmp_dbin_layer(void* a, void* b) {
+    const struct precomputed_dbin_layer* first = a;
+    const struct precomputed_dbin_layer* second = a;
+    return first->map - second->map;
+}
+
 int precompute_dbin_layers(struct precomputed_dbin_layer* dest, int group) {
-    uint64_t flag;
-    aatree_node* unique_layers_tree = NULL;
+    aa* unique_layers_tree = aa_new(cmp_dbin_layer);
+    struct precomputed_dbin_layer* tree_data = malloc(DBIN_CONFIG_COUNT * sizeof(struct precomputed_dbin_layer));
+    
     int layer_count = 0;
     for (int config = 0; config < DBIN_CONFIG_COUNT; config++) {
         uint32_t output = dbin_layer128(SHUFB_IDENTITY_128, config);
-        if (aa_tree_search(unique_layers_tree, output)) continue;
-        /* if (in_list(dest, layer_count, output)) continue; */
-        unique_layers_tree = aa_tree_insert(output, unique_layers_tree, &flag);
+        if (aa_find(unique_layers_tree, &output)) continue;
+
+        tree_data[layer_count] = (struct precomputed_dbin_layer) { output, config };
+        aa_add(unique_layers_tree, tree_data + layer_count, NULL);
         dest[layer_count] = (struct precomputed_dbin_layer) { output, config };
         layer_count++;
     }
     if (verbosity > 3) {
         printf("%d 2bin layers\n", layer_count);
     }
-    aa_tree_free(unique_layers_tree);
+    aa_free(unique_layers_tree);
+    free(tree_data);
     return layer_count;
 }
 

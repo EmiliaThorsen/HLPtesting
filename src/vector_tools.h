@@ -195,11 +195,7 @@ static __m256i reverse_movmask_256(uint32_t mask) {
  * needed because simple casting 64 to 32 doesn't preserve sign
  */
 static int int64_cmp_cast(int64_t x) {
-    /* return (int64_t) uint >> _lzcnt_u64(uint); */
-    /* return (uint >> 32) | (((uint >> 16) | uint) & UINT16_MAX); */
-    if (x > 0) return 1;
-    if (x < 0) return -1;
-    return 0;
+    return  x >> (63 - _lzcnt_u64(x));
 }
 
 static int cmp_int64(void* a, void* b) {

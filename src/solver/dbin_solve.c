@@ -5,10 +5,18 @@
 #include "../vector_tools.h"
 #include "../cache.h"
 
-struct precomputed_dbin_layer {
+#include "../search/hlp_random.h" // for rand_uint64
+
+struct precomputed_dbin_finish {
     uint32_t map;
-    uint16_t config_dbin;
-    uint16_t config_prehex;
+    unsigned int dbin_config : 10;
+    unsigned int hex_dist1_config : 11;
+    unsigned int hex_dist2_config : 11;
+};
+
+struct dbin_finish_bsearch_key {
+    uint64_t table;
+    int8_t depth;
 };
 
 struct dbin_solve_globals {
@@ -17,7 +25,7 @@ struct dbin_solve_globals {
         int group;
         int unique_dbin_layers;
         uint8_t* prune_table;
-        struct precomputed_dbin_layer* dbin_layers;
+        struct precomputed_dbin_finish* dbin_layers;
     } config;
     struct __output__ {
         uint16_t* chain;
@@ -97,74 +105,136 @@ int get_dbin_exact_group(uint32_t mask) {
 /* #define PRUNE_TABLE_BYTES PRUNE_TABLE_ENTRY_COUNT */
 #define PRUNE_TABLE_BYTES (PRUNE_TABLE_ENTRY_COUNT / 2 + 1) 
 
-int in_list(struct precomputed_dbin_layer* array, int length, uint32_t value) {
+int in_list(struct precomputed_dbin_finish* array, int length, uint32_t value) {
     for (int i = 0; i < length; i++) { 
         if (array[i].map == value) return 1;
     }
     return 0;
 }
 
+static int get_dbin_finish_depth(const struct precomputed_dbin_finish* finish) {
+    return /*(finish->dbin_config != 0) +*/ (finish->hex_dist1_config != 0) + (finish->hex_dist2_config != 0);
+}
+
 static int cmp_dbin_layer(void* a, void* b) {
-    struct precomputed_dbin_layer* first = a;
-    struct precomputed_dbin_layer* second = b;
-    return int64_cmp_cast((int64_t) first->map - second->map);
+    struct precomputed_dbin_finish* first = a;
+    struct precomputed_dbin_finish* second = b;
+    int dif = int64_cmp_cast((int64_t) first->map - second->map);
+    /* if (dif != 0) */
+        return dif;
+    /* return -(get_dbin_finish_depth(first) < get_dbin_finish_depth(second)); */
 }
 
 static int cmp_dbin_remainder(const void* a, const void *b) {
-    const uint64_t* key = a;
-    const struct precomputed_dbin_layer* layer = b;
-    return int64_cmp_cast(((*key >> 32) & ~(layer->map)) - (*key & UINT32_MAX & layer->map));
+    const struct dbin_finish_bsearch_key* key = a;
+    const struct precomputed_dbin_finish* finish = b;
+    int table_dif = int64_cmp_cast(((key->table >> 32) & ~(finish->map)) - (key->table & UINT32_MAX & finish->map));
+    /* if (table_dif != 0) */
+        return table_dif;
+    // if the precomped layer uses less depth than the key, it's a match
+    // so depth only matters if key < precomp
+    /* return -(key->depth < get_dbin_finish_depth(finish)); */
+
 }
 
-static int precompute_dbin_layers(struct precomputed_dbin_layer** dest, int group) {
+static int precompute_dbin_layers(struct precomputed_dbin_finish** dest, int group) {
+    struct precomputed_dbin_finish* tree_data[3];
+
     aa* unique_layers_tree = aa_new(cmp_dbin_layer);
-    struct precomputed_dbin_layer* dbin_layers = malloc(DBIN_CONFIG_COUNT * sizeof(struct precomputed_dbin_layer));
+    tree_data[0] = malloc(DBIN_CONFIG_COUNT * sizeof(struct precomputed_dbin_finish));
     
-    // get the first layers
-    int layer_count = 0;
+    // get the final 2bin layers
+    int dist0_count = 0;
     for (int config = 0; config < DBIN_CONFIG_COUNT; config++) {
         uint32_t table = dbin_layer128(SHUFB_IDENTITY_128, config);
-        dbin_layers[layer_count] = (struct precomputed_dbin_layer) { table, config, 0 };
+        tree_data[0][dist0_count] = (struct precomputed_dbin_finish) { table, config, 0, 0 };
 
-        if (aa_find(unique_layers_tree, dbin_layers + layer_count)) continue;
+        if (aa_find(unique_layers_tree, tree_data[0] + dist0_count)) continue;
 
-        aa_add(unique_layers_tree, dbin_layers + layer_count, NULL);
-        layer_count++;
+        aa_add(unique_layers_tree, tree_data[0] + dist0_count, NULL);
+        dist0_count++;
     }
 
-    *dest = malloc(layer_count * sizeof(struct precomputed_dbin_layer));
-    aa_to_array(unique_layers_tree, *dest, sizeof(struct precomputed_dbin_layer));
+    if (verbosity > 3) printf("unique final 2bin layers: %'ld\n", dist0_count);
 
-    struct precomputed_hex_layer* hex_layers = precompute_hex_layers(group, 0);
-    struct precomputed_dbin_layer* dual_layer_data = malloc(layer_count * hex_layers->next_layer_count * sizeof(struct precomputed_dbin_layer));
+    struct precomputed_hex_layer* identity_layer = precompute_hex_layers(group, -1);
 
-    // get pairs of layers
-    int two_layer_count = 0;
-    for (struct precomputed_hex_layer** hex_layer = hex_layers->next_layers; hex_layer < hex_layers->next_layers + hex_layers->next_layer_count; hex_layer++) {
-        for (struct precomputed_dbin_layer* dbin_layer = dbin_layers; dbin_layer < dbin_layers + layer_count; dbin_layer++) {
-            uint32_t table = dbin_exact_prepend_map_packed64((*hex_layer)->map, dbin_layer->map);
-            dual_layer_data[two_layer_count] = (struct precomputed_dbin_layer) { table, dbin_layer->config_dbin, (*hex_layer)->config };
+    tree_data[1] = malloc(identity_layer->next_layer_count * dist0_count * sizeof(struct precomputed_dbin_finish));
+    int dist1_count = 0;
+    for (struct precomputed_dbin_finish* final = tree_data[0]; final < tree_data[0] + dist0_count; final++) {
+        for (int hex_i = 0; hex_i < identity_layer->next_layer_count; hex_i++) {
+            struct precomputed_hex_layer* hex_layer = identity_layer->next_layers[hex_i];
+            uint32_t table = dbin_exact_prepend_map_packed64(hex_layer->map, final->map);
 
-            if (aa_find(unique_layers_tree, dual_layer_data + two_layer_count)) continue;
+            tree_data[1][dist1_count] = (struct precomputed_dbin_finish) { table, final->dbin_config, hex_layer->config, hex_i };
+            if (aa_find(unique_layers_tree, tree_data[1] + dist1_count)) continue;
 
-            aa_add(unique_layers_tree, dual_layer_data + two_layer_count, NULL);
-            two_layer_count++;
+            aa_add(unique_layers_tree, tree_data[1] + dist1_count, NULL);
+            dist1_count++;
         }
     }
 
-    if (verbosity > 2) {
-        printf("final layer precompute finished for group %d\n%d 2bin layers; %'d hex + 2bin layer pairs\n", group, layer_count, two_layer_count);
+    if (verbosity > 3) printf("unique final 2 layers: %'ld\n", dist1_count);
+
+    tree_data[2] = malloc(identity_layer->next_layer_count * dist1_count * sizeof(struct precomputed_dbin_finish));
+    int dist2_count = 0;
+    for (struct precomputed_dbin_finish* final = tree_data[1]; final < tree_data[1] + dist1_count; final++) {
+        // extract the layers and fix the dist2 config
+        struct precomputed_hex_layer* base_layer = identity_layer->next_layers[final->hex_dist2_config];
+        final->hex_dist2_config = 0;
+        for (int hex_i = 0; hex_i < base_layer->next_layer_count; hex_i++) {
+            struct precomputed_hex_layer* hex_layer = base_layer->next_layers[hex_i];
+            uint32_t table = dbin_exact_prepend_map_packed64(hex_layer->map, final->map);
+
+            tree_data[2][dist2_count] = (struct precomputed_dbin_finish) { table, final->dbin_config, final->hex_dist1_config, hex_layer->config };
+            if (aa_find(unique_layers_tree, tree_data[2] + dist2_count)) continue;
+
+            aa_add(unique_layers_tree, tree_data[2] + dist2_count, NULL);
+            dist2_count++;
+        }
     }
 
-    // include both 1 and 2 layer endings
-    *dest = malloc((two_layer_count + layer_count) * sizeof(struct precomputed_dbin_layer));
-    aa_to_array(unique_layers_tree, *dest, sizeof(struct precomputed_dbin_layer));
+    int total_count = dist0_count + dist1_count + dist2_count;
 
-    free(dbin_layers);
-    free(dual_layer_data);
+    if (verbosity > 3) printf("unique final 3 layers: %'ld\n", dist2_count);
+
+    // include both 1 and 2 layer endings
+    *dest = malloc(total_count * sizeof(struct precomputed_dbin_finish));
+    aa_to_array(unique_layers_tree, *dest, sizeof(struct precomputed_dbin_finish));
+
+    for (int i = 0; i < 3; i++) {
+        free(tree_data[i]);
+    }
     aa_free(unique_layers_tree);
 
-    return layer_count + two_layer_count;
+    return total_count;
+
+#if 0
+    // calculate more lengths
+    int total_dist0_count = dist0_count;
+    int prev_dist0_count = dist0_count;
+    for (int depth = 1; depth < max_depth; depth++) {
+        int next_dist0_count = 0;
+        tree_data[depth] = malloc(hex_layers->next_dist0_count * prev_dist0_count * sizeof(struct precomputed_dbin_finish));
+
+        for (struct precomputed_dbin_finish* final = tree_data[depth - 1]; final < tree_data[depth - 1] + prev_dist0_count; final++) {
+            struct precomputed_hex_layer* prev_layers = 
+            for (int hex_i = 0; i < ) {
+
+                uint32_t table = dbin_exact_prepend_map_packed64(*hex_layer, final->map);
+
+                tree_data[depth][next_dist0_count] = (struct precomputed_dbin_finish) { table, , depth };
+
+                if (aa_find(unique_layers_tree, tree_data[depth] + next_dist0_count)) continue;
+
+                aa_add(unique_layers_tree, tree_data[depth] + next_dist0_count, NULL);
+                next_dist0_count++;
+            }
+        }
+        prev_dist0_count = next_dist0_count;
+        total_dist0_count += next_dist0_count;
+    }
+#endif
 }
 
 /*
@@ -303,20 +373,33 @@ int check_dbin_partial(uint32_t exact, uint64_t partial) {
 }
 
 static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer* layer, uint64_t remaining_map, int remaining_depth) {
-    if (remaining_depth <= 1) {
+    if (remaining_depth < 3) {
         globals->stats.final_bsearches++;
-        struct precomputed_dbin_layer* pair = bsearch(&remaining_map, globals->config.dbin_layers, globals->config.unique_dbin_layers, sizeof(struct precomputed_dbin_layer), cmp_dbin_remainder);
-        if (pair == NULL) return 0;
-
+        // do the bsearch, but then continue as normal if not the very end. only a minor time loss, but probably faster because it's better for cache
+        struct dbin_finish_bsearch_key key = { remaining_map, remaining_depth };
+        struct precomputed_dbin_finish* final;
+#if 1
+        // for testing how much time is spent in b search
+        for (int i = 0; i < 10; i++) {
+            struct dbin_finish_bsearch_key rand_key = {rand_uint64(), 9};
+            final = bsearch(&rand_key, globals->config.dbin_layers, globals->config.unique_dbin_layers, sizeof(struct precomputed_dbin_finish), cmp_dbin_remainder);
+        }
+#endif
+        final = bsearch(&key, globals->config.dbin_layers, globals->config.unique_dbin_layers, sizeof(struct precomputed_dbin_finish), cmp_dbin_remainder);
+        if (final == NULL) return 0;
+        
         if (globals->output.chain != NULL) {
-            uint16_t* cursor = globals->output.chain + globals->config.current_bfs_depth;
-            *cursor = pair->config_dbin;
-            if (remaining_depth == 1) {
-                *(cursor - 1) = pair->config_prehex;
-            }
+            /* int entry_depth = (finish->dbin_config != 0) + (finish->hex_dist1_config != 0) + (finish->hex_dist2_config != 0); */
+            /* int offset = remaining_depth - entry_depth; */
+            uint16_t* endpoint = globals->output.chain + globals->config.current_bfs_depth;
+            *endpoint = final->dbin_config;
+            if (final->hex_dist1_config) *(endpoint - 1) = final->hex_dist1_config;
+            if (final->hex_dist2_config) *(endpoint - 2) = final->hex_dist2_config;
         }
 
-        if (verbosity > 3) printf("%03x: %08x\n", pair->config_dbin, pair->map);
+        if (verbosity > 3) {
+            printf("%03x: %08x\n(%03x, %03x)\n", final->dbin_config, final->map, final->hex_dist1_config, final->hex_dist2_config);
+        }
         return 1;
     }
 
@@ -324,14 +407,17 @@ static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer*
         globals->stats.iterations++;
         struct precomputed_hex_layer* next_layer = layer->next_layers[i];
         uint64_t next_remaining_map = dbin_partial_unprepend_map_packed64(next_layer->map, remaining_map);
+
         // legality check
         if (next_remaining_map & (next_remaining_map >> 32)) continue;
+
         // prune table check
         if (uint4_array_get(globals->config.prune_table, get_ternary_index(next_remaining_map, (next_remaining_map >> 32))) > remaining_depth) continue;
         if (uint4_array_get(globals->config.prune_table, get_ternary_index(next_remaining_map >> 16, next_remaining_map >> 48)) > remaining_depth) continue;
 
-        // passed, check further
+        // cache check
         if (cache_check(&main_cache, next_remaining_map, 99 - remaining_depth)) continue;
+        // passed, check further
         
         int success = dfs(globals, next_layer, next_remaining_map, remaining_depth - 1);
         if (success) {

@@ -223,6 +223,23 @@ uint64_t apply_hex_chain(uint64_t start, uint16_t* chain, int length) {
     return start;
 }
 
+void print_chain(uint16_t* chain, int length) {
+    const char layer_strings[][16] = {
+        "%X, %X",
+        "%X, *%X",
+        "*%X, %X",
+        "*%X, *%X",
+        "^%X, *%X",
+        "^*%X, %X"
+    };
+    for (int i = 0; i < length; i++) {
+        uint16_t conf = chain[i];
+        printf(layer_strings[conf >> 8], (conf >> 4) & 15, conf & 15);
+        if (i < length - 1) printf(";  ");
+    }
+}
+
+
 
 enum LONG_OPTIONS {
     LONG_OPTIONS_BLANK

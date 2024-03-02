@@ -454,22 +454,6 @@ int solve(struct hlp_request request, uint16_t* output_chain, int max_depth, enu
     return result;
 }
 
-void print_chain(uint16_t* chain, int length) {
-    const char layer_strings[][16] = {
-        "%X, %X",
-        "%X, *%X",
-        "*%X, %X",
-        "*%X, *%X",
-        "^%X, *%X",
-        "^*%X, %X"
-    };
-    for (int i = 0; i < length; i++) {
-        uint16_t conf = chain[i];
-        printf(layer_strings[conf >> 8], (conf >> 4) & 15, conf & 15);
-        if (i < length - 1) printf(";  ");
-    }
-}
-
 void print_hlp_map(uint64_t map) {
     struct hlp_request request = {map, map};
     print_hlp_request(request);

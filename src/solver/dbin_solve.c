@@ -431,12 +431,12 @@ static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer*
     return 0;
 }
 
-int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
+int dbin_solve(uint64_t partial_map, uint16_t* output_chain, int max_depth) {
     if (max_depth < 0) return max_depth - 1;
 
     fill_bct_halve_values();
     struct dbin_solve_globals globals = {0};
-    globals.config.group = get_dbin_exact_group(map);
+    globals.config.group = get_dbin_exact_group(partial_map);
     globals.output.chain = output_chain;
     
     cache_init(&main_cache);
@@ -445,8 +445,6 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
 
     globals.config.prune_table = get_prune_table(globals.config.group, 0);
     struct precomputed_hex_layer* identity_layer = precompute_hex_layers(globals.config.group, -1);
-
-    uint64_t partial_map = (uint64_t) map << 32 | (map ^ UINT32_MAX);
 
     for (int depth = 0; depth < max_depth; depth++) {
         if (verbosity > 1) printf("checking depth %d\n", depth);
@@ -465,19 +463,55 @@ int dbin_solve(uint32_t map, uint16_t* output_chain, int max_depth) {
     return max_depth - 1;
 }
 
-void dbin_print_solve(uint32_t map) { 
-    printf("solving %08x\n", map);
+uint64_t dbin_expand_exact(uint32_t input) {
+    return (uint64_t) input ^ UINT32_MAX | ((uint64_t) input << 32);
+}
+
+int dbin_solve_exact(uint32_t map, uint16_t* output_chain, int max_depth) {
+    return dbin_solve(dbin_expand_exact(map), output_chain, max_depth);
+}
+
+void nice_print_u16_le_partial(uint32_t x) {
+    for (int i = 0; i < 16; i++) {
+        if (i && (i % 4 == 0)) printf(" ");
+        int bit0 = (x >> i) & 1;
+        int bit1 = (x >> (i + 16)) & 1;
+        printf("%c", bit0 ? '0' : bit1 ? '1' : 'X');
+    }
+}
+
+void nice_print_u16_le(uint16_t x) {
+    for (int i = 0; i < 16; i++) {
+        if (i && (i % 4 == 0)) printf(" ");
+        printf("%d", (x >> i) & 1);
+    }
+}
+
+void dbin_print_solve(uint64_t map) { 
+    // prevent erroneous states, if both are set to 1, just make them wildcards
+    map &= ~((map >> 32) | (map << 32));
+    if (verbosity > 0) {
+        printf("solving for:\n");
+        nice_print_u16_le_partial(_pext_u64(map, LO_HALVES_16_64));
+        printf("\n");
+        nice_print_u16_le_partial(_pext_u64(map, HI_HALVES_16_64));
+        printf("\n");
+    }
     uint16_t chain[64];
     int length = dbin_solve(map, chain, 64);
-    printf("solution, length %d:", length);
-    if (verbosity > 2) {
-        uint64_t post_hex = apply_hex_chain(IDENTITY_PERM_LE64, chain, length - 1);
-        printf(" (%08x)", dbin_layer64(post_hex, chain[length - 1]));
+    if (verbosity > 0) {
+        printf("solution found, length %d:  ", length);
     }
-    for (int i = 0; i < length; i++) {
-        printf("\t%03x", chain[i]);
-    }
+    print_chain(chain, length);
     printf("\n");
+    if ((verbosity > 0 && ((map | (map >> 32)) & UINT32_MAX) != UINT32_MAX) || verbosity > 2) {
+        uint64_t post_hex = apply_hex_chain(IDENTITY_PERM_LE64, chain, length - 1);
+        uint64_t result = dbin_layer64(post_hex, chain[length - 1]);
+        nice_print_u16_le(result);
+        printf("\n");
+        nice_print_u16_le(result >> 16);
+        printf("\n");
+    }
 }
 
 enum LONG_OPTIONS {

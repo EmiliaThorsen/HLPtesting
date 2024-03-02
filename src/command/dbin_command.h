@@ -6,8 +6,9 @@
 
 struct arg_settings_command_dbin {
     struct arg_settings_global* global;
-    uint16_t first_bits, second_bits;
-    int arg_count;
+    uint64_t bits;
+    int bit_count;
+    int transpose, reverse;
     struct arg_settings_solver_dbin settings_solver_dbin;
 };
 

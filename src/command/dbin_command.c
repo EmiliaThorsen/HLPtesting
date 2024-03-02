@@ -30,6 +30,8 @@ static const char doc[] =
 ;
 
 static const struct argp_option options[] = {
+    { "transpose", 't', 0, 0, "transpose the input" },
+    { "swap", 's', 0, 0, "swap bits within pairs" },
     { 0 }
 };
 
@@ -37,22 +39,44 @@ static error_t parse_opt(int key, char* arg, struct argp_state *state) {
     struct arg_settings_command_dbin* settings = state->input;
     switch (key) {
         case ARGP_KEY_ARG:
-            settings->arg_count++;
-            if (settings->arg_count == 1) {
-                settings->first_bits = strtol(arg, 0, 16);
-            } else if (settings->arg_count == 2) {
-                settings->second_bits = strtol(arg, 0, 16);
-            } else {
-                argp_error(state, "too many functions");
+            for (char* c = arg; *c; c++) {
+                uint64_t mask = 0;
+                switch (*c) {
+                    case '0': mask = 1; break;
+                    case '1': mask = (uint64_t) 1 << 32; break;
+                    case 'x':
+                    case 'X':
+                    case '.': break;
+                    case '\n':
+                    case '\t':
+                    case '\r':
+                    case ' ': settings->bit_count--; break;
+                    default: argp_error(state, "unexpected symbol: %c", *c);
+                }
+                int offset = settings->transpose ? ((settings->bit_count % 2) * 16 + (settings->bit_count / 2)) : settings->bit_count;
+                if (settings->reverse) offset ^= 16;
+                settings->bits |= mask << offset;
+
+                settings->bit_count++;
+                if (settings->bit_count > 32) argp_error(state, "too many bits");
             }
             break;
+        case 't':
+            settings->transpose = 1;
+            break;
+        case 'r':
+            settings->reverse = 1;
+            break;
         case ARGP_KEY_INIT:
-            settings->arg_count = 0;
+            settings->bit_count = 0;
+            settings->bits = 0;
+            settings->transpose = 0;
+            settings->reverse = 0;
             settings->settings_solver_dbin.global = settings->global;
             state->child_inputs[0] = &settings->settings_solver_dbin;
             break;
         case ARGP_KEY_SUCCESS:
-            dbin_print_solve(((uint32_t) settings->second_bits << 16) | settings->first_bits);
+            dbin_print_solve(settings->bits);
             break;
         case ARGP_KEY_NO_ARGS:
             argp_state_help(state, stderr, ARGP_HELP_USAGE | ARGP_HELP_SHORT_USAGE | ARGP_HELP_SEE);

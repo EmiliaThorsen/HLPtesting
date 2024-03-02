@@ -11,7 +11,7 @@ static int verbosity;
 static void random_search(int count, int group) {
     for (int i=0; i<count; i++) {
         uint32_t map = rand_uint64();
-        dbin_print_solve(map);
+        dbin_print_solve(dbin_expand_exact(map));
     }
 }
 

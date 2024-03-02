@@ -29,6 +29,8 @@ extern uint32_t dbin_layer128(__m128i map, uint16_t config);
 extern uint32_t dbin_layer64(uint64_t map, uint16_t config);
 extern uint32_t dbin_layer_packed64(uint64_t map, uint16_t config);
 
+extern void print_chain(uint16_t* chain, int length);
+
 
 /* get precomputed layers
  * 

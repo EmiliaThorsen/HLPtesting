@@ -37,7 +37,9 @@ struct dbin_solve_globals {
 };
 
 // array of values if you look at the index in binary, and read it directly as a ternary number
-int* bct_half_values = NULL;
+// split into halves because it's better on the cache, which is in high demand throughout the solver
+int* bct_low_values = NULL;
+int* bct_high_values = NULL;
 
 static int verbosity;
 static int global_max_depth;
@@ -60,15 +62,11 @@ int bct_lowest_two(uint64_t x) {
     return _tzcnt_u64(x & HI_HALVES_1_64) / 2;
 }
 
-// temporarily using uint8 for simplicity
 uint8_t uint4_array_get(uint8_t* array, int index) {
-    //return array[index];
     return 15 & (array[index / 2] >> ((index & 1) * 4));
 }
 
 void uint4_array_set(uint8_t* array, int index, uint8_t value) {
-    //array[index] = value;
-    //return;
     int shift = (index % 2) * 4;
     array[index / 2] = (array[index / 2] & (0xf0 >> shift)) | ((value & 15) << shift);
 }
@@ -81,13 +79,25 @@ uint32_t dbin_exact_prepend_map_packed64(uint64_t map, uint32_t state) {
  * we have a 1 for every bit that needs to be that specific value
  */
 
-uint64_t dbin_partial_unprepend_map_packed64(uint64_t map, uint64_t state) {
-    map = little_endian_xmm_to_uint(unpack_uint_to_xmm(map));
-    uint64_t result = 0;
-    for (int i = 0; i < 16; i++) {
-        result |= ((state >> i) & BROADCAST_4x(16, 1)) << ((map >> (i * 4)) & 15);
-    }
-    return result;
+uint64_t dbin_partial_unprepend_map_packed64(uint64_t map_uint, uint64_t state_uint) {
+    __m256i map = _mm256_srlv_epi64(DOUBLE_XMM(unpack_uint_to_xmm(map_uint)), (const __m256i) { 0, 0, 32, 32 });
+    __m256i state = _mm256_srlv_epi64(_mm256_set1_epi64x(state_uint), (const __m256i) { 0, 8, 4, 12 });
+
+    __m256i result = _mm256_setzero_si256();
+    const __m256i state_mask = _mm256_set1_epi16(1);
+    const __m256i map_mask = _mm256_set1_epi64x(0xff);
+    // we can't use a for loop due to needing immediate constants
+#define MAP_ROUND(i) _mm256_and_si256(_mm256_srli_si256(map, i), map_mask)
+#define STATE_ROUND(i) _mm256_and_si256(_mm256_srli_epi64(state, i), state_mask)
+#define GET_ROUND(i) _mm256_sllv_epi64(STATE_ROUND(i), MAP_ROUND(i))
+    result = _mm256_or_si256(_mm256_or_si256(GET_ROUND(0), GET_ROUND(1)), _mm256_or_si256(GET_ROUND(2), GET_ROUND(3)));
+#undef MAP_ROUND
+#undef STATE_ROUND
+#undef GET_ROUND
+
+    __m128i result128 = _mm_or_si128(_mm256_castsi256_si128(result), DOWNWARD_YMM(result));
+    result128 = _mm_or_si128(result128, _mm_srli_si128(result128, 8));
+    return _mm_cvtsi128_si64(result128);
 }
 
 int get_dbin_exact_group(uint32_t mask) {
@@ -105,39 +115,29 @@ int get_dbin_exact_group(uint32_t mask) {
 /* #define PRUNE_TABLE_BYTES PRUNE_TABLE_ENTRY_COUNT */
 #define PRUNE_TABLE_BYTES (PRUNE_TABLE_ENTRY_COUNT / 2 + 1) 
 
-int in_list(struct precomputed_dbin_finish* array, int length, uint32_t value) {
-    for (int i = 0; i < length; i++) { 
-        if (array[i].map == value) return 1;
-    }
-    return 0;
-}
-
-static int get_dbin_finish_depth(const struct precomputed_dbin_finish* finish) {
-    return /*(finish->dbin_config != 0) +*/ (finish->hex_dist1_config != 0) + (finish->hex_dist2_config != 0);
-}
-
 static int cmp_dbin_layer(void* a, void* b) {
     struct precomputed_dbin_finish* first = a;
     struct precomputed_dbin_finish* second = b;
-    int dif = int64_cmp_cast((int64_t) first->map - second->map);
-    /* if (dif != 0) */
-        return dif;
-    /* return -(get_dbin_finish_depth(first) < get_dbin_finish_depth(second)); */
+    return int64_cmp_cast((int64_t) first->map - second->map);
 }
 
 static int cmp_dbin_remainder(const void* a, const void *b) {
     const struct dbin_finish_bsearch_key* key = a;
     const struct precomputed_dbin_finish* finish = b;
-    int table_dif = int64_cmp_cast(((key->table >> 32) & ~(finish->map)) - (key->table & UINT32_MAX & finish->map));
-    /* if (table_dif != 0) */
-        return table_dif;
-    // if the precomped layer uses less depth than the key, it's a match
-    // so depth only matters if key < precomp
-    /* return -(key->depth < get_dbin_finish_depth(finish)); */
-
+    return int64_cmp_cast(((key->table >> 32) & ~(finish->map)) - (key->table & UINT32_MAX & finish->map));
 }
 
+static struct dbin_finish_history {
+    struct precomputed_dbin_finish* finishes;
+    int count;
+} dbin_finish_history[4] = {0};
+
 static int precompute_dbin_layers(struct precomputed_dbin_finish** dest, int group) {
+    struct dbin_finish_history* historic = dbin_finish_history + group - 1;
+    if (historic->finishes) {
+        *dest = historic->finishes;
+        return historic->count;
+    }
     struct precomputed_dbin_finish* tree_data[3];
 
     aa* unique_layers_tree = aa_new(cmp_dbin_layer);
@@ -207,35 +207,13 @@ static int precompute_dbin_layers(struct precomputed_dbin_finish** dest, int gro
     }
     aa_free(unique_layers_tree);
 
+    historic->finishes = *dest;
+    historic->count = total_count;
+
     return total_count;
-
-#if 0
-    // calculate more lengths
-    int total_dist0_count = dist0_count;
-    int prev_dist0_count = dist0_count;
-    for (int depth = 1; depth < max_depth; depth++) {
-        int next_dist0_count = 0;
-        tree_data[depth] = malloc(hex_layers->next_dist0_count * prev_dist0_count * sizeof(struct precomputed_dbin_finish));
-
-        for (struct precomputed_dbin_finish* final = tree_data[depth - 1]; final < tree_data[depth - 1] + prev_dist0_count; final++) {
-            struct precomputed_hex_layer* prev_layers = 
-            for (int hex_i = 0; i < ) {
-
-                uint32_t table = dbin_exact_prepend_map_packed64(*hex_layer, final->map);
-
-                tree_data[depth][next_dist0_count] = (struct precomputed_dbin_finish) { table, , depth };
-
-                if (aa_find(unique_layers_tree, tree_data[depth] + next_dist0_count)) continue;
-
-                aa_add(unique_layers_tree, tree_data[depth] + next_dist0_count, NULL);
-                next_dist0_count++;
-            }
-        }
-        prev_dist0_count = next_dist0_count;
-        total_dist0_count += next_dist0_count;
-    }
-#endif
 }
+
+static uint8_t* pregened_prune_table = 0;
 
 /*
  * create the prune table, combined for both bits as they are nearly identical.
@@ -243,6 +221,7 @@ static int precompute_dbin_layers(struct precomputed_dbin_finish** dest, int gro
  * a single dbin layer.
  */
 uint8_t* get_prune_table(int group, int offset) {
+    if (pregened_prune_table) return pregened_prune_table;
     struct precomputed_hex_layer* hex_layers = precompute_hex_layers(group, -1);
     // format: bits 0-3: distance, 4-14: layer index, 15: emptiness flag
     int16_t* pretable = malloc(PRETABLE_SIZE * sizeof(int16_t));
@@ -337,11 +316,13 @@ uint8_t* get_prune_table(int group, int offset) {
 
     free(pretable);
     if (verbosity > 2) printf("prune table generated\n");
+    pregened_prune_table = prune_table;
     return prune_table;
 }
 
 void fill_bct_halve_values() {
-    if (bct_half_values) return;
+
+    if (bct_low_values) return;
 
     int powers_of_3[16];
     powers_of_3[0] = 1;
@@ -349,19 +330,26 @@ void fill_bct_halve_values() {
         powers_of_3[i] = 3 * powers_of_3[i - 1];
     }
 
-    bct_half_values = malloc(65536 * sizeof(int));
-    for (int i = 0; i < 65536; i++) {
+    bct_low_values = malloc(256 * sizeof(int));
+    bct_high_values = malloc(256 * sizeof(int));
+    for (int i = 0; i < 256; i++) {
         int value = 0;
-        for (int j = 0; j < 16; j++) {
-            if ((i >> j) & 1)
+        for (int j = 0; j < 8; j++) {
+            if ((i >> j) & 1) {
                 value += powers_of_3[j];
+            }
         }
-        bct_half_values[i] = value;
+        bct_low_values[i] = value;
+        bct_high_values[i] = value * 81 * 81;
     }
 }
 
 int get_ternary_index(uint16_t zeroes, uint16_t ones) {
-    return bct_half_values[UINT16_MAX ^ ((uint16_t) zeroes | ones)] * 2 + bct_half_values[ones];
+    uint16_t twos = ~(ones | zeroes);
+    return bct_high_values[twos >> 8] * 2 +
+        bct_low_values[twos & 0xff] * 2 +
+        bct_high_values[ones >> 8] +
+        bct_low_values[ones & 0xff];
 }
 
 int check_dbin_partial(uint32_t exact, uint64_t partial) {
@@ -375,10 +363,9 @@ int check_dbin_partial(uint32_t exact, uint64_t partial) {
 static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer* layer, uint64_t remaining_map, int remaining_depth) {
     if (remaining_depth < 3) {
         globals->stats.final_bsearches++;
-        // do the bsearch, but then continue as normal if not the very end. only a minor time loss, but probably faster because it's better for cache
         struct dbin_finish_bsearch_key key = { remaining_map, remaining_depth };
         struct precomputed_dbin_finish* final;
-#if 1
+#if 0
         // for testing how much time is spent in b search
         for (int i = 0; i < 10; i++) {
             struct dbin_finish_bsearch_key rand_key = {rand_uint64(), 9};
@@ -389,8 +376,6 @@ static int dfs(struct dbin_solve_globals* globals, struct precomputed_hex_layer*
         if (final == NULL) return 0;
         
         if (globals->output.chain != NULL) {
-            /* int entry_depth = (finish->dbin_config != 0) + (finish->hex_dist1_config != 0) + (finish->hex_dist2_config != 0); */
-            /* int offset = remaining_depth - entry_depth; */
             uint16_t* endpoint = globals->output.chain + globals->config.current_bfs_depth;
             *endpoint = final->dbin_config;
             if (final->hex_dist1_config) *(endpoint - 1) = final->hex_dist1_config;

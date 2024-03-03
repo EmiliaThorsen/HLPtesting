@@ -110,6 +110,7 @@ DECLARE_MANY_HALVES(HI, 256);
 #define PERMQ_REV_4x64_256      SHUFD_REV_4x32_256
 #define PERMQ_REV_2x128_256     SHUFD_REV_2x64_256
 
+#define DOWNWARD_YMM(x)         _mm256_castsi256_si128(_mm256_permute4x64_epi64(x, 0xee))
 
 static __m128i unpack_uint_to_xmm(uint64_t uint) {
     __m128i input = _mm_cvtsi64_si128(uint);

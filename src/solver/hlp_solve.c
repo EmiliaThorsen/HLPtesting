@@ -314,8 +314,7 @@ static int dfs(struct hlp_solve_globals* globals, uint64_t input, int depth, str
     // test to see if we found a solution, even if we're not at the end. this
     // can happen even though it seems like it shouldn't
     if (test_map(globals, input)) {
-        globals->output.chain_length = depth + 1;
-        if (globals->output.chain != 0) globals->output.chain[depth] = layer->config;
+        globals->output.chain_length = depth;
         return 1;
     }
 
